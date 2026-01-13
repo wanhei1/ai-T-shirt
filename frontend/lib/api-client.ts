@@ -90,7 +90,19 @@ class ApiClient {
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
-        throw new Error(errorData?.message || `An unknown error occurred.`);
+        const errorMessage = errorData?.message || `An unknown error occurred.`
+
+        // Attach status to the error so callers can branch on auth failures.
+        const err = new Error(errorMessage) as Error & { status?: number }
+        err.status = response.status
+
+        // If auth failed, proactively clear stored tokens to force re-login.
+        if (typeof window !== "undefined" && (response.status === 401 || response.status === 403)) {
+          localStorage.removeItem('authToken')
+          localStorage.removeItem('token')
+        }
+
+        throw err
       }
 
       // Handle cases with no content
@@ -164,7 +176,7 @@ class ApiClient {
   }
 
   // Orders
-  async createOrder(orderPayload: { total: number; items: any[]; selections?: any; shipping_info?: any }) {
+  async createOrder(orderPayload: { total: number; items: any[]; selections?: any; design?: any; shipping_info?: any; canvas?: any; publishToAll?: boolean; sourceAllId?: number | null; category?: string | null }) {
     return this.request('/api/orders', {
       method: 'POST',
       body: JSON.stringify(orderPayload),
@@ -174,6 +186,28 @@ class ApiClient {
   async getOrders() {
     return this.request<{ orders: any[] }>('/api/orders', {
       method: 'GET',
+    });
+  }
+
+  // Public Gallery
+  async getGallery(params?: { limit?: number; offset?: number; category?: string }) {
+    const searchParams = new URLSearchParams();
+    if (typeof params?.limit === 'number') searchParams.set('limit', String(params.limit));
+    if (typeof params?.offset === 'number') searchParams.set('offset', String(params.offset));
+    if (typeof params?.category === 'string' && params.category.trim().length > 0) {
+      searchParams.set('category', params.category.trim());
+    }
+
+    const query = searchParams.toString();
+    const endpoint = query ? `/api/gallery?${query}` : '/api/gallery';
+    return this.request<{ designs: any[] }>(endpoint, {
+      method: 'GET',
+    });
+  }
+
+  async getGalleryItem(orderId: number | string) {
+    return this.request<{ design: any }>(`/api/gallery/${orderId}`, {
+      method: "GET",
     });
   }
 

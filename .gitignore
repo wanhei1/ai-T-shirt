@@ -7,12 +7,19 @@
 # next.js
 /.next/
 **/.next/
+.next-*
+**/.next-*/
+**/.next-*
 /out/
 **/out/
 
 # production
 /build
 **/build
+
+# compiled output
+dist/
+**/dist/
 
 # debug
 npm-debug.log*
@@ -28,4 +35,48 @@ yarn-error.log*
 
 # typescript
 *.tsbuildinfo
-next-env.d.tsComfyUI/
+next-env.d.ts
+
+# python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# editor/OS
+.DS_Store
+.idea/
+.vscode/
+
+# archives
+*.zip
+*.7z
+*.tar
+*.tar.gz
+
+# accidental placeholder files
+\[20
+/from
+/backend/src/test.txt
+
+# ML model weights / large binaries
+*.ckpt
+*.pth
+*.pt
+*.onnx
+*.safetensors
+*.bin
+*.tflite
+
+# Large subprojects / generated assets (keep repo lightweight)
+ComfyUI/
+CatVTON/
+detectron2/
+
+# ComfyUI runtime folders (in case ComfyUI is included later)
+**/models/
+**/input/
+**/output/
+**/temp/
+**/user/

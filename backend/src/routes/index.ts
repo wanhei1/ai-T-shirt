@@ -1,8 +1,11 @@
 import { Router } from 'express';
 import { AuthController } from '../controllers';
-import { UserModel, OrderModel, MembershipModel } from '../models';
+import { AIController } from '../controllers/aiController';
+import { UserModel, OrderModel, MembershipModel, AllDesignModel } from '../models';
 import { authenticate } from '../middleware/auth';
 import { Pool } from 'pg';
+import { normalizeCategory } from '../utils/category';
+import { categoryAliases } from '../utils/category';
 import { randomUUID } from 'crypto';
 
 export const createRoutes = (pool: Pool | null) => {
@@ -21,7 +24,9 @@ export const createRoutes = (pool: Pool | null) => {
 
     const userModel = new UserModel(pool);
     const authController = new AuthController(userModel);
+    const aiController = new AIController();
     const orderModel = new OrderModel(pool);
+    const allDesignModel = new AllDesignModel(pool);
     const membershipModel = new MembershipModel(pool);
 
     const membershipPlans: Record<string, { amount: number; currency: string; durationDays: number }> = {
@@ -36,6 +41,65 @@ export const createRoutes = (pool: Pool | null) => {
 
     // 登录路由
     router.post('/login', (req, res) => authController.login(req, res));
+
+    // 公开画廊（展示商城作品，来源 all_designs 表）
+    router.get('/gallery', async (req, res) => {
+        try {
+            const limit = req.query.limit ? Number(req.query.limit) : undefined;
+            const offset = req.query.offset ? Number(req.query.offset) : undefined;
+            const category = typeof req.query.category === 'string' ? req.query.category : undefined;
+            const designs = await allDesignModel.list({ limit, offset, category });
+            res.json({ designs });
+        } catch (error) {
+            console.error('Get gallery error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
+    router.get('/gallery/:designId', async (req, res) => {
+        try {
+            const designId = Number(req.params.designId);
+            if (!Number.isFinite(designId) || designId <= 0) {
+                return res.status(400).json({ message: 'Invalid designId' });
+            }
+
+            const design = await allDesignModel.getById(designId);
+            if (!design) {
+                return res.status(404).json({ message: 'Not found' });
+            }
+            res.json({ design });
+        } catch (error) {
+            console.error('Get gallery item error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
+    // AI 生成路由
+    router.post('/generate', authenticate, async (req, res) => {
+        try {
+            if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
+
+            const membership = await membershipModel.getMembershipByUserId(req.userId);
+            const expiresAt = membership?.expires_at ? new Date(membership.expires_at) : null;
+            const isActive = Boolean(
+                membership &&
+                (!membership.status || membership.status === 'active') &&
+                (!expiresAt || expiresAt.getTime() >= Date.now())
+            );
+
+            if (!isActive) {
+                return res.status(403).json({
+                    message: 'Active membership required',
+                    code: 'MEMBERSHIP_REQUIRED'
+                });
+            }
+
+            return aiController.generateDesign(req, res);
+        } catch (error) {
+            console.error('Membership gate error:', error);
+            return res.status(500).json({ message: 'Internal server error' });
+        }
+    });
 
     // 受保护的路由示例
     router.get('/profile', authenticate, async (req, res) => {
@@ -70,15 +134,79 @@ export const createRoutes = (pool: Pool | null) => {
         try {
             if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
 
-            const { total, items, selections, design, shipping_info } = req.body;
+            const { total, items, selections, design, shipping_info, canvas, publishToAll = true, sourceAllId, category } = req.body || {};
             if (!items || !Array.isArray(items) || typeof total !== 'number') {
                 return res.status(400).json({ message: 'Invalid order payload' });
             }
 
-            const created = await orderModel.createOrder(req.userId, total, items, selections, design, shipping_info);
-            res.status(201).json({ order: created });
+            const resolvedCategory =
+                (typeof category === 'string' && category.trim().length > 0 ? category.trim() : null) ||
+                (typeof design?.category === 'string' && design.category.trim().length > 0 ? design.category.trim() : null);
+
+                const normalizedCategory = normalizeCategory(resolvedCategory) ?? resolvedCategory;
+                console.log('[orders.create] category', {
+                    userId: req.userId,
+                    category: typeof category === 'string' ? category : null,
+                    designCategory: typeof design?.category === 'string' ? design.category : null,
+                    resolvedCategory,
+                    normalizedCategory,
+                    publishToAll: !!publishToAll
+                });
+
+            const canvasPayload = {
+                frontSnapshot: canvas?.frontSnapshot ?? canvas?.front ?? design?.canvas?.snapshots?.front ?? null,
+                backSnapshot: canvas?.backSnapshot ?? canvas?.back ?? design?.canvas?.snapshots?.back ?? null,
+                meta: canvas?.meta ?? design?.canvas ?? null
+            };
+
+            const created = await orderModel.createOrder({
+                userId: req.userId,
+                total,
+                    category: normalizedCategory,
+                items,
+                selections,
+                design,
+                shippingInfo: shipping_info,
+                canvas: canvasPayload,
+                sourceAllId: sourceAllId ?? null
+            });
+
+            let allDesignId: number | null = null;
+            if (publishToAll) {
+                const allDesign = await allDesignModel.createDesign({
+                    userId: req.userId,
+                    sourceOrderId: created.id,
+                        category: normalizedCategory,
+                    selections,
+                    design,
+                    canvas: canvasPayload
+                });
+                allDesignId = allDesign?.id ?? null;
+                if (!sourceAllId && allDesignId) {
+                    await orderModel.attachSourceAllId(created.id, allDesignId);
+                    (created as any).source_all_id = allDesignId;
+                }
+            }
+
+            res.status(201).json({ order: created, allDesignId });
         } catch (error) {
             console.error('Create order error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
+    // Debug: inspect category normalization/aliases (auth required)
+    router.get('/debug/category', authenticate, async (req, res) => {
+        try {
+            const raw = typeof req.query?.value === 'string' ? req.query.value : '';
+            const normalized = normalizeCategory(raw);
+            res.json({
+                input: raw,
+                normalized,
+                aliases: normalized ? categoryAliases(normalized) : []
+            });
+        } catch (error) {
+            console.error('Debug category error:', error);
             res.status(500).json({ message: 'Internal server error' });
         }
     });

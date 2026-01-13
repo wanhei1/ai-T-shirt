@@ -109,6 +109,7 @@ export default function MembershipPage() {
 
   const isMembershipActive = useMemo(() => {
     if (!membership) return false;
+    if (membership.status && membership.status !== "active") return false;
     if (!membership.expires_at) return true;
     return new Date(membership.expires_at).getTime() >= Date.now();
   }, [membership]);
@@ -139,9 +140,6 @@ export default function MembershipPage() {
     setErrorMessage(null);
 
     try {
-      // 模拟支付流程，生产环境应替换为真实支付集成
-      await new Promise((resolve) => setTimeout(resolve, 900));
-
       const paymentReference = `demo-${selectedPlanId}-${Date.now()}`;
       const response = (await apiClient.activateMembership({
         planId: selectedPlanId,
@@ -149,15 +147,20 @@ export default function MembershipPage() {
         provider: "mock",
       })) as MembershipResponse;
 
-      if (response?.membership) {
-        setMembership(response.membership);
+      // Always re-fetch membership so privileges take effect immediately across the app.
+      const refreshed = (await apiClient.getMembership()) as MembershipResponse;
+      const nextMembership = refreshed?.membership ?? response?.membership ?? null;
+      setMembership(nextMembership);
+
+      if (nextMembership) {
         setSuccessMessage(
-          translate({ zh: "会员开通成功，尽情创作吧！", en: "Membership activated successfully. Happy creating!" })
+          translate({
+            zh: "会员开通成功，已立即授予会员权限！",
+            en: "Membership activated and privileges granted immediately!",
+          })
         );
       } else {
-        setSuccessMessage(
-          translate({ zh: "会员状态已更新", en: "Membership status updated" })
-        );
+        setSuccessMessage(translate({ zh: "会员状态已更新", en: "Membership status updated" }));
       }
     } catch (error) {
       console.error("Membership activation failed", error);

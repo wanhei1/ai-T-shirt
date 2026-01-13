@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Sparkles, Loader2, Download, Palette } from "lucide-react"
 import { ComfyUIStatusCard } from "@/components/comfyui-status-card"
+import Link from "next/link"
 
 interface AIGeneratorProps {
   onImageGenerated: (imageUrl: string) => void
@@ -42,6 +43,7 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
   const [isGenerating, setIsGenerating] = useState(false)
   const [generationProgress, setGenerationProgress] = useState("")
   const [error, setError] = useState<string | null>(null)
+  const [errorAction, setErrorAction] = useState<null | "login" | "membership">(null)
   const [generatedImages, setGeneratedImages] = useState<Array<{ 
     url: string
     prompt: string
@@ -59,11 +61,17 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
     
     try {
       setGenerationProgress("正在发送请求到服务器...")
+
+      const token =
+        (typeof window !== "undefined" &&
+          (localStorage.getItem("authToken") || localStorage.getItem("token"))) ||
+        null
       
       const response = await fetch("/api/generate-image", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
         },
         body: JSON.stringify({ prompt, style }),
       })
@@ -71,12 +79,29 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
       setGenerationProgress("正在处理响应...")
 
       if (!response.ok) {
-        throw new Error(`服务器错误: ${response.status} ${response.statusText}`)
+        const body = await response.json().catch(() => null)
+
+        if (response.status === 401) {
+          setErrorAction("login")
+          throw new Error(body?.zh || body?.error || "请先登录后再使用 AI 生图")
+        }
+
+        if (response.status === 403) {
+          if (body?.code === "MEMBERSHIP_REQUIRED") {
+            setErrorAction("membership")
+          }
+          throw new Error(body?.zh || body?.error || "需要会员才能使用 AI 生图")
+        }
+
+        throw new Error(
+          body?.error || body?.details || `服务器错误: ${response.status} ${response.statusText}`
+        )
       }
 
       const data = await response.json()
 
       if (data.success) {
+        setErrorAction(null)
         setGenerationProgress("生成完成！")
         
         const newImage = { 
@@ -86,6 +111,17 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
           isPlaceholder: data.isPlaceholder,
           timestamp: Date.now()
         }
+
+        // Persist the last selected generation style as a shop/gallery category.
+        // This allows checkout to publish to the correct category (e.g. anime/漫画).
+        if (typeof window !== "undefined") {
+          try {
+            window.localStorage.setItem("designCategory", style)
+          } catch {
+            // ignore storage failures
+          }
+        }
+
         setGeneratedImages((prev) => [newImage, ...prev])
         setPrompt("")
         
@@ -118,6 +154,7 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
 
   const clearError = () => {
     setError(null)
+    setErrorAction(null)
   }
 
   return (
@@ -155,6 +192,23 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
               <div className="w-4 h-4 bg-red-500 rounded-full flex-shrink-0 mt-0.5" />
               <div className="flex-1">
                 <p className="text-sm text-red-700">{error}</p>
+
+                {errorAction === "login" && (
+                  <div className="mt-2">
+                    <Button asChild size="sm" variant="outline" className="bg-transparent">
+                      <Link href="/auth">去登录</Link>
+                    </Button>
+                  </div>
+                )}
+
+                {errorAction === "membership" && (
+                  <div className="mt-2">
+                    <Button asChild size="sm" variant="outline" className="bg-transparent">
+                      <Link href="/membership">去开通会员</Link>
+                    </Button>
+                  </div>
+                )}
+
                 <button 
                   onClick={clearError}
                   className="text-xs text-red-600 hover:text-red-800 mt-1"
@@ -178,7 +232,19 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
               <Palette className="w-4 h-4" />
               Art Style
             </Label>
-            <Select value={style} onValueChange={setStyle}>
+            <Select
+              value={style}
+              onValueChange={(value) => {
+                setStyle(value)
+                if (typeof window !== "undefined") {
+                  try {
+                    window.localStorage.setItem("designCategory", value)
+                  } catch {
+                    // ignore storage failures
+                  }
+                }
+              }}
+            >
               <SelectTrigger className="mt-1">
                 <SelectValue />
               </SelectTrigger>

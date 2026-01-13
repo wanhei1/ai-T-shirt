@@ -1,4 +1,23 @@
 import { Pool } from 'pg';
+import { categoryAliases, normalizeCategory } from '../utils/category';
+
+type CanvasPayload = {
+    frontSnapshot?: string | null;
+    backSnapshot?: string | null;
+    meta?: any;
+};
+
+type CreateOrderParams = {
+    userId: number;
+    total: number;
+    category?: string | null;
+    items: any;
+    selections: any;
+    design: any;
+    shippingInfo: any;
+    canvas?: CanvasPayload;
+    sourceAllId?: number | null;
+};
 
 export class UserModel {
     constructor(private pool: Pool) { }
@@ -73,17 +92,121 @@ export class UserModel {
 export class OrderModel {
     constructor(private pool: Pool) { }
 
-    async createOrder(userId: number, total: number, items: any, selections: any, design: any, shippingInfo: any) {
-        const query = `INSERT INTO orders (user_id, total, items, selections, design, shipping_info) VALUES ($1, $2, $3::jsonb, $4::jsonb, $5::jsonb, $6::jsonb) RETURNING id, user_id, total, status, items, selections, design, shipping_info, created_at`;
-        const values = [userId, total, JSON.stringify(items), JSON.stringify(selections || {}), JSON.stringify(design || {}), JSON.stringify(shippingInfo || {})];
+    async createOrder(params: CreateOrderParams) {
+        const { userId, total, category, items, selections, design, shippingInfo, canvas, sourceAllId } = params;
+
+        const query = `
+            INSERT INTO orders (user_id, total, category, items, selections, design, shipping_info, canvas_front, canvas_back, canvas_meta, source_all_id)
+            VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10::jsonb, $11)
+            RETURNING id, user_id, total, category, status, items, selections, design, shipping_info, canvas_front, canvas_back, canvas_meta, source_all_id, created_at
+        `;
+
+        const values = [
+            userId,
+            total,
+            category ?? null,
+            JSON.stringify(items),
+            JSON.stringify(selections || {}),
+            JSON.stringify(design || {}),
+            JSON.stringify(shippingInfo || {}),
+            canvas?.frontSnapshot ?? null,
+            canvas?.backSnapshot ?? null,
+            canvas?.meta ? JSON.stringify(canvas.meta) : null,
+            sourceAllId ?? null
+        ];
+
         const result = await this.pool.query(query, values);
         return result.rows[0];
     }
 
+    async attachSourceAllId(orderId: number, sourceAllId: number) {
+        const query = `UPDATE orders SET source_all_id = $1 WHERE id = $2 RETURNING id, source_all_id`;
+        const result = await this.pool.query(query, [sourceAllId, orderId]);
+        return result.rows[0];
+    }
+
     async getOrdersByUserId(userId: number) {
-        const query = `SELECT id, user_id, total, status, items, selections, design, shipping_info, created_at FROM orders WHERE user_id = $1 ORDER BY created_at DESC`;
+        const query = `SELECT id, user_id, total, category, status, items, selections, design, shipping_info, canvas_front, canvas_back, canvas_meta, source_all_id, created_at FROM orders WHERE user_id = $1 ORDER BY created_at DESC`;
         const result = await this.pool.query(query, [userId]);
         return result.rows || [];
+    }
+}
+
+export class AllDesignModel {
+    constructor(private pool: Pool) { }
+
+    async createDesign(params: {
+        userId: number;
+        sourceOrderId: number | null;
+        category?: string | null;
+        selections: any;
+        design: any;
+        canvas?: CanvasPayload;
+    }) {
+        const { userId, sourceOrderId, category, selections, design, canvas } = params;
+
+        const query = `
+            INSERT INTO all_designs (user_id, source_order_id, category, selections, design, canvas_front, canvas_back, canvas_meta)
+            VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8::jsonb)
+            RETURNING id, user_id, source_order_id, category, selections, design, canvas_front, canvas_back, canvas_meta, created_at
+        `;
+
+        const values = [
+            userId,
+            sourceOrderId,
+            category ?? null,
+            JSON.stringify(selections || {}),
+            JSON.stringify(design || {}),
+            canvas?.frontSnapshot ?? null,
+            canvas?.backSnapshot ?? null,
+            canvas?.meta ? JSON.stringify(canvas.meta) : null
+        ];
+
+        const result = await this.pool.query(query, values);
+        return result.rows[0];
+    }
+
+    async list(params?: { limit?: number; offset?: number; category?: string }) {
+        const limit = Math.min(Math.max(Number(params?.limit ?? 30) || 30, 1), 100);
+        const offset = Math.max(Number(params?.offset ?? 0) || 0, 0);
+
+        const category = typeof params?.category === 'string' && params.category.trim().length > 0
+            ? params.category.trim()
+            : null;
+
+        const canonicalCategory = normalizeCategory(category);
+        const categoryFilter = canonicalCategory ? categoryAliases(canonicalCategory) : category;
+
+        const whereSql = categoryFilter
+            ? (Array.isArray(categoryFilter)
+                ? 'WHERE a.category = ANY($3::text[])'
+                : 'WHERE a.category = $3')
+            : '';
+        const query = `
+            SELECT a.id, a.id AS order_id, a.user_id, a.source_order_id, a.category, a.selections, a.design, a.canvas_front, a.canvas_back, a.canvas_meta, a.created_at, u.username
+            FROM all_designs a
+            LEFT JOIN users u ON u.id = a.user_id
+            ${whereSql}
+            ORDER BY a.created_at DESC
+            LIMIT $1 OFFSET $2
+        `;
+
+        const values: any[] = categoryFilter ? [limit, offset, categoryFilter] : [limit, offset];
+        const result = await this.pool.query(query, values);
+        return result.rows || [];
+    }
+
+    async getById(id: number) {
+        const query = `
+            SELECT a.id, a.id AS order_id, a.user_id, a.source_order_id, a.category, a.selections, a.design, a.canvas_front, a.canvas_back, a.canvas_meta, a.created_at, u.username
+            FROM all_designs a
+            LEFT JOIN users u ON u.id = a.user_id
+            WHERE a.id = $1
+            LIMIT 1
+        `;
+
+        const result = await this.pool.query(query, [id]);
+        return result.rows[0] || null;
     }
 }
 

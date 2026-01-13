@@ -1,44 +1,18 @@
 "use client"
 
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useMemo } from "react"
 import apiClient from '@/lib/api-client'
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Separator } from "@/components/ui/separator"
+import { Input } from "@/components/ui/input"
 import { ArrowLeft, Download, Share2, ShoppingCart, Palette, RotateCcw, Check } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
 import { useLanguage } from "@/contexts/language-context"
-
-interface DesignElement {
-  id: string
-  type: "text" | "image" | "ai-generated"
-  content: string
-  x: number
-  y: number
-  width: number
-  height: number
-  rotation: number
-  fontSize?: number
-  fontFamily?: string
-  color?: string
-  visible: boolean
-  side: "front" | "back" // Added side property to track which side the element belongs to
-}
-
-interface TShirtSelections {
-  style: string
-  color: string
-  size: string
-  price: number
-}
-
-interface DesignData {
-  selections: TShirtSelections
-  elements: DesignElement[]
-  side: string
-}
+import { buildCanvasMeta, CANVAS_SIZE, getShirtColorHex, getShirtPhotoSrc } from "@/lib/design-canvas"
+import type { DesignData, DesignElement, CanvasMeta } from "@/types/design"
 
 export default function PreviewPage() {
   const router = useRouter()
@@ -48,64 +22,151 @@ export default function PreviewPage() {
   const [currentView, setCurrentView] = useState<"front" | "back">("front")
   const [isExporting, setIsExporting] = useState(false)
   const [orderPlaced, setOrderPlaced] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [tryOnPersonFile, setTryOnPersonFile] = useState<File | null>(null)
+  const [tryOnImageUrl, setTryOnImageUrl] = useState<string | null>(null)
+  const [tryOnError, setTryOnError] = useState<string | null>(null)
+  const [isTryOnLoading, setIsTryOnLoading] = useState(false)
+
+  const resolvedCanvasMeta: CanvasMeta = useMemo(() => {
+    if (designData?.canvas) return designData.canvas
+    return buildCanvasMeta(designData?.selections?.color)
+  }, [designData])
+
+  const shirtFill = useMemo(() => getShirtColorHex(designData?.selections?.color), [designData])
+  const shirtPhotoSrc = useMemo(() => getShirtPhotoSrc(designData?.selections?.color), [designData])
+
+  const loadImage = (src: string) =>
+    new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image()
+      img.crossOrigin = "anonymous"
+      img.onload = () => resolve(img)
+      img.onerror = () => reject(new Error("Failed to load image"))
+      img.src = src
+    })
+
+  const renderSnapshot = async (side: "front" | "back") => {
+    if (!designData) return null
+
+    const meta = resolvedCanvasMeta
+    const canvas = document.createElement("canvas")
+    const scale = 2
+    canvas.width = meta.width * scale
+    canvas.height = meta.height * scale
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return null
+
+    // Background behind the shirt silhouette
+    ctx.fillStyle = meta.backgroundColor || "#f8fafc"
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+    // Draw shirt base: prefer real photo (black/white). Fallback to SVG silhouette.
+    if (shirtPhotoSrc) {
+      try {
+        const base = await loadImage(shirtPhotoSrc)
+        ctx.drawImage(base, 0, 0, canvas.width, canvas.height)
+      } catch (error) {
+        console.warn("Failed to load shirt base image, falling back to SVG", error)
+        ctx.save()
+        ctx.scale((meta.width * scale) / 200, (meta.height * scale) / 200)
+        const shirtPath = new Path2D(
+          "M70 30 L90 30 Q100 50 110 30 L130 30 Q145 30 150 45 L175 75 L155 95 L155 165 L45 165 L45 95 L25 75 L50 45 Q55 30 70 30 Z"
+        )
+        ctx.fillStyle = shirtFill || "#e5e7eb"
+        ctx.strokeStyle = "#444"
+        ctx.lineWidth = 4 / scale // keep stroke similar after scaling
+        ctx.lineJoin = "round"
+        ctx.lineCap = "round"
+        ctx.fill(shirtPath)
+        ctx.stroke(shirtPath)
+        ctx.restore()
+      }
+    } else {
+      ctx.save()
+      ctx.scale((meta.width * scale) / 200, (meta.height * scale) / 200)
+      const shirtPath = new Path2D(
+        "M70 30 L90 30 Q100 50 110 30 L130 30 Q145 30 150 45 L175 75 L155 95 L155 165 L45 165 L45 95 L25 75 L50 45 Q55 30 70 30 Z"
+      )
+      ctx.fillStyle = shirtFill || "#e5e7eb"
+      ctx.strokeStyle = "#444"
+      ctx.lineWidth = 4 / scale // keep stroke similar after scaling
+      ctx.lineJoin = "round"
+      ctx.lineCap = "round"
+      ctx.fill(shirtPath)
+      ctx.stroke(shirtPath)
+      ctx.restore()
+    }
+
+    // Clip and render elements inside the print area
+    ctx.save()
+    ctx.translate(meta.printArea.x * scale, meta.printArea.y * scale)
+    ctx.beginPath()
+    ctx.rect(0, 0, meta.printArea.width * scale, meta.printArea.height * scale)
+    ctx.clip()
+
+    const elements = (designData.elements || []).filter((el) => el.visible && el.side === side)
+    for (const element of elements) {
+      ctx.save()
+      ctx.translate((element.x + element.width / 2) * scale, (element.y + element.height / 2) * scale)
+      ctx.rotate((element.rotation * Math.PI) / 180)
+      ctx.translate((-element.width / 2) * scale, (-element.height / 2) * scale)
+
+      if (element.type === "text") {
+        ctx.fillStyle = element.color || "#111827"
+        ctx.font = `${element.fontSize || 24}px ${element.fontFamily || "Arial"}`
+        ctx.textAlign = "center"
+        ctx.textBaseline = "middle"
+        ctx.fillText(element.content, (element.width * scale) / 2, (element.height * scale) / 2, element.width * scale)
+      } else if (element.content) {
+        try {
+          const img = await loadImage(element.content)
+          ctx.drawImage(img, 0, 0, element.width * scale, element.height * scale)
+        } catch (error) {
+          console.warn("Skip image in snapshot", error)
+        }
+      }
+
+      ctx.restore()
+    }
+
+    ctx.restore()
+    return canvas.toDataURL("image/png")
+  }
+
+  const estimatedTotal = useMemo(() => {
+    if (!designData) return 0
+    return Number((designData.selections.price + 5 + 7.99).toFixed(2))
+  }, [designData])
 
   useEffect(() => {
     const storedDesignData = localStorage.getItem("designData")
     if (storedDesignData) {
-      setDesignData(JSON.parse(storedDesignData))
+      try {
+        const parsed = JSON.parse(storedDesignData) as DesignData
+        if (!parsed.canvas) {
+          parsed.canvas = buildCanvasMeta(parsed?.selections?.color)
+        }
+        setDesignData(parsed)
+      } catch (error) {
+        console.error("Failed to parse design data", error)
+      }
     }
   }, [])
 
   const exportDesign = async () => {
-    if (!canvasRef.current || !designData) return
+    if (!designData) return
 
     setIsExporting(true)
     try {
-      // In a real implementation, you would:
-      // 1. Render the design to a high-resolution canvas
-      // 2. Convert to PNG/PDF
-      // 3. Upload to cloud storage
-      // 4. Return download URL
+      const snapshot = await renderSnapshot(currentView)
+      if (!snapshot) return
 
-      // Simulate export process
-      await new Promise((resolve) => setTimeout(resolve, 2000))
-
-      // Create a simple download link for demo
-      const canvas = document.createElement("canvas")
-      canvas.width = 800
-      canvas.height = 1000
-      const ctx = canvas.getContext("2d")
-
-      if (ctx) {
-        // Set background color
-        ctx.fillStyle = designData.selections.color === "white" ? "#FFFFFF" : "#000000"
-        ctx.fillRect(0, 0, canvas.width, canvas.height)
-
-        // Add text indicating this is a demo export
-        ctx.fillStyle = "#666666"
-        ctx.font = "24px Arial"
-        ctx.textAlign = "center"
-        ctx.fillText("Design Export Preview", canvas.width / 2, canvas.height / 2)
-        ctx.fillText(
-          `${designData.selections.style} - ${designData.selections.size}`,
-          canvas.width / 2,
-          canvas.height / 2 + 40,
-        )
-
-        // Convert to blob and download
-        canvas.toBlob((blob) => {
-          if (blob) {
-            const url = URL.createObjectURL(blob)
-            const a = document.createElement("a")
-            a.href = url
-            a.download = `custom-tshirt-design-${Date.now()}.png`
-            document.body.appendChild(a)
-            a.click()
-            document.body.removeChild(a)
-            URL.revokeObjectURL(url)
-          }
-        })
-      }
+      const a = document.createElement("a")
+      a.href = snapshot
+      a.download = `custom-tshirt-${currentView}-${Date.now()}.png`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
     } catch (error) {
       console.error("Export failed:", error)
     } finally {
@@ -131,28 +192,116 @@ export default function PreviewPage() {
     }
   }
 
+  const dataUrlToBlob = (dataUrl: string): Blob => {
+    const [header, base64] = dataUrl.split(",")
+    const mime = header.match(/data:(.*?);base64/)?.[1] || "image/png"
+    const bytes = atob(base64)
+    const arr = new Uint8Array(bytes.length)
+    for (let i = 0; i < bytes.length; i += 1) arr[i] = bytes.charCodeAt(i)
+    return new Blob([arr], { type: mime })
+  }
+
+  const runTryOn = async () => {
+    if (!designData) return
+    if (!tryOnPersonFile) {
+      setTryOnError(translate({ zh: "请先上传一张模特照片", en: "Please upload a model photo first" }))
+      return
+    }
+
+    setIsTryOnLoading(true)
+    setTryOnError(null)
+
+    try {
+      const clothSnapshot = await renderSnapshot(currentView)
+      if (!clothSnapshot) {
+        throw new Error("无法生成衣服快照")
+      }
+
+      const form = new FormData()
+      form.append("person", tryOnPersonFile)
+      form.append("cloth", dataUrlToBlob(clothSnapshot), `cloth-${currentView}.png`)
+
+      const resp = await fetch("/api/virtual-tryon", {
+        method: "POST",
+        body: form,
+      })
+
+      const json = (await resp.json().catch(() => null)) as
+        | { success?: boolean; imageUrl?: string; error?: string; details?: string }
+        | null
+
+      if (!resp.ok || !json?.success || !json.imageUrl) {
+        const msg = json?.details || json?.error || "试穿失败"
+        throw new Error(msg)
+      }
+
+      setTryOnImageUrl(json.imageUrl)
+    } catch (error) {
+      setTryOnImageUrl(null)
+      setTryOnError(error instanceof Error ? error.message : "试穿失败")
+    } finally {
+      setIsTryOnLoading(false)
+    }
+  }
+
   const placeOrder = async () => {
     // In a real implementation, this would integrate with a payment system.
     if (!designData) return;
-    const total = Number((designData.selections.price + 5 + 7.99).toFixed(2));
+
+    const token =
+      (typeof window !== "undefined" &&
+        (localStorage.getItem("authToken") || localStorage.getItem("token"))) ||
+      null;
+    if (!token) {
+      alert(translate({ zh: "请先登录后再下单", en: "Please log in before placing an order" }));
+      router.push("/auth");
+      return;
+    }
+
+    const total = estimatedTotal;
 
     try {
+      setIsSubmitting(true)
+
+      const [frontSnapshot, backSnapshot] = await Promise.all([
+        renderSnapshot("front"),
+        renderSnapshot("back"),
+      ])
+
+      const canvasForSave: CanvasMeta = {
+        ...resolvedCanvasMeta,
+        snapshots: { front: frontSnapshot, back: backSnapshot },
+      }
+
       const payload = {
         total,
-        items: designData.elements.map(e => ({ id: e.id, type: e.type, content: e.content })),
+        // Save full element layout info (position/size/rotation/side/etc) so the order can be faithfully reproduced.
+        items: designData.elements,
         selections: designData.selections,
-        design: designData,
+        design: { ...designData, canvas: canvasForSave },
+        canvas: { frontSnapshot, backSnapshot, meta: resolvedCanvasMeta },
+        publishToAll: true,
+        sourceAllId: null,
         shipping_info: {}
       };
 
       await apiClient.createOrder(payload);
       setOrderPlaced(true);
       setTimeout(() => {
-        router.push("/");
+        router.push("/profile");
       }, 2000);
     } catch (error) {
-      console.error('Order submission failed:', error);
-      alert('下单失败，请重试');
+      console.error('Order submission failed:', error)
+      const status = (error as { status?: number })?.status
+      const message = (error as Error)?.message || ""
+      if (status === 401 || status === 403 || message.includes("authenticate token")) {
+        alert(translate({ zh: "登录已失效，请重新登录", en: "Session expired, please sign in again." }))
+        router.push("/auth")
+        return
+      }
+      alert(translate({ zh: "下单失败，请重试", en: "Failed to place order. Please try again." }))
+    } finally {
+      setIsSubmitting(false)
     }
   }
 
@@ -271,75 +420,93 @@ export default function PreviewPage() {
                   </div>
                 </CardHeader>
                 <CardContent>
-                  <div className="max-w-md mx-auto">
+                  <div className="max-w-md mx-auto flex justify-center">
                     <div
                       ref={canvasRef}
-                      className="relative bg-white rounded-lg shadow-lg aspect-[3/4] border-2 border-border overflow-hidden"
-                      style={{
-                        backgroundColor:
-                          designData.selections.color === "white"
-                            ? "#FFFFFF"
-                            : designData.selections.color === "black"
-                              ? "#000000"
-                              : "#F3F4F6",
-                      }}
+                      className="relative select-none border-2 border-border rounded-lg shadow-lg"
+                      style={{ width: CANVAS_SIZE.width, height: CANVAS_SIZE.height }}
                     >
-                      {/* T-shirt outline */}
-                      <div className="absolute inset-4 border border-dashed border-gray-300 rounded-lg opacity-30" />
-
-                      {/* Design Elements */}
-                      {designData.elements
-                        .filter((el) => el.visible && el.side === currentView) // Filter elements by current view (front/back)
-                        .map((element) => (
-                          <div
-                            key={element.id}
-                            className="absolute"
-                            style={{
-                              left: element.x,
-                              top: element.y,
-                              width: element.width,
-                              height: element.height,
-                              transform: `rotate(${element.rotation}deg)`,
-                            }}
-                          >
-                            {element.type === "text" ? (
-                              <div
-                                className="w-full h-full flex items-center justify-center text-center break-words"
-                                style={{
-                                  fontSize: element.fontSize,
-                                  fontFamily: element.fontFamily,
-                                  color: element.color,
-                                }}
-                              >
-                                {element.content}
-                              </div>
-                            ) : (
-                              <img
-                                src={element.content || "/placeholder.svg"}
-                                alt="Design element"
-                                className="w-full h-full object-contain"
-                              />
-                            )}
-                          </div>
-                        ))}
-
-                      {/* Empty state for current view */}
-                      {designData.elements.filter((el) => el.side === currentView).length === 0 && ( // Show empty state only when no elements exist for current side
-                        <div className="absolute inset-0 flex items-center justify-center text-muted-foreground">
-                          <div className="text-center">
-                            <RotateCcw className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                            <p className="text-sm">
-                              {translate({
-                                zh: currentView === "front" ? "前视图" : "后视图",
-                                en: currentView === "front" ? "Front view" : "Back view",
-                              })}
-                            </p>
-                            <p className="text-xs">
-                              {translate({ zh: "此面没有设计元素", en: "No design elements on this side" })}
-                            </p>
-                          </div>
-                        </div>
+                      {shirtPhotoSrc ? (
+                        <img
+                          src={shirtPhotoSrc}
+                          alt={translate({ zh: "T 恤底图", en: "T-shirt base" })}
+                          className="absolute inset-0 w-full h-full object-contain"
+                        />
+                      ) : (
+                        <svg aria-hidden viewBox="0 0 200 200" className="absolute inset-0 w-full h-full" role="presentation">
+                          <path
+                            d="M70 30 L90 30 Q100 50 110 30 L130 30 Q145 30 150 45 L175 75 L155 95 L155 165 L45 165 L45 95 L25 75 L50 45 Q55 30 70 30 Z"
+                            fill={shirtFill}
+                            stroke="#444"
+                            strokeWidth={2}
+                            strokeLinejoin="round"
+                            strokeLinecap="round"
+                          />
+                        </svg>
                       )}
+
+                      <div
+                        className="absolute overflow-hidden"
+                        style={{
+                          left: resolvedCanvasMeta.printArea.x,
+                          top: resolvedCanvasMeta.printArea.y,
+                          width: resolvedCanvasMeta.printArea.width,
+                          height: resolvedCanvasMeta.printArea.height,
+                        }}
+                      >
+
+                        {designData.elements
+                          .filter((el) => el.visible && el.side === currentView)
+                          .map((element) => (
+                            <div
+                              key={element.id}
+                              className="absolute"
+                              style={{
+                                left: element.x,
+                                top: element.y,
+                                width: element.width,
+                                height: element.height,
+                                transform: `rotate(${element.rotation}deg)`,
+                              }}
+                            >
+                              {element.type === "text" ? (
+                                <div
+                                  className="w-full h-full flex items-center justify-center text-center break-words"
+                                  style={{
+                                    fontSize: element.fontSize,
+                                    fontFamily: element.fontFamily,
+                                    color: element.color,
+                                  }}
+                                >
+                                  {element.content}
+                                </div>
+                              ) : (
+                                <img
+                                  src={element.content || "/placeholder.svg"}
+                                  alt="Design element"
+                                  className="w-full h-full object-contain"
+                                />
+                              )}
+                            </div>
+                          ))}
+
+                        {designData.elements.filter((el) => el.side === currentView).length === 0 && (
+                          <div className="absolute inset-0 flex items-center justify-center text-muted-foreground">
+                            <div className="text-center">
+                              <RotateCcw className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                              <p className="text-sm">
+                                {translate({
+                                  zh: currentView === "front" ? "前视图" : "后视图",
+                                  en: currentView === "front" ? "Front view" : "Back view",
+                                })}
+                              </p>
+                              <p className="text-xs">
+                                {translate({ zh: "此面没有设计元素", en: "No design elements on this side" })}
+                              </p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 </CardContent>
@@ -431,12 +598,7 @@ export default function PreviewPage() {
                         <div
                           className="w-4 h-4 rounded-full border"
                           style={{
-                            backgroundColor:
-                              designData.selections.color === "white"
-                                ? "#FFFFFF"
-                                : designData.selections.color === "black"
-                                  ? "#000000"
-                                  : "#F3F4F6",
+                            backgroundColor: getShirtColorHex(designData.selections.color),
                           }}
                         />
                         <span className="font-medium capitalize">{designData.selections.color}</span>
@@ -479,9 +641,55 @@ export default function PreviewPage() {
                     <Separator />
                     <div className="flex justify-between text-lg font-semibold">
                       <span>{translate({ zh: "总计：", en: "Total:" })}</span>
-                      <span>${(designData.selections.price + 5 + 7.99).toFixed(2)}</span>
+                      <span>${estimatedTotal.toFixed(2)}</span>
                     </div>
                   </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>{translate({ zh: "模特试穿", en: "Virtual Try-On" })}</CardTitle>
+                  <CardDescription>
+                    {translate({
+                      zh: "上传模特照片，使用当前视角的衣服设计进行试穿预览",
+                      en: "Upload a model photo and preview try-on with the current view design",
+                    })}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                    <div className="text-sm text-muted-foreground">
+                      {translate({ zh: "模特照片", en: "Model photo" })}
+                    </div>
+                    <Input
+                      type="file"
+                      accept="image/*"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0] || null
+                        setTryOnPersonFile(f)
+                        setTryOnImageUrl(null)
+                        setTryOnError(null)
+                      }}
+                    />
+                  </div>
+
+                  <Button onClick={runTryOn} className="w-full" disabled={isTryOnLoading || !tryOnPersonFile}>
+                    {isTryOnLoading
+                      ? translate({ zh: "生成中...", en: "Generating..." })
+                      : translate({ zh: "生成试穿图", en: "Generate Try-On" })}
+                  </Button>
+
+                  {tryOnError ? <p className="text-sm text-destructive">{tryOnError}</p> : null}
+
+                  {tryOnImageUrl ? (
+                    <div className="space-y-2">
+                      <div className="text-sm text-muted-foreground">
+                        {translate({ zh: "试穿结果", en: "Result" })}
+                      </div>
+                      <img src={tryOnImageUrl} alt="tryon" className="w-full rounded-lg border border-border" />
+                    </div>
+                  ) : null}
                 </CardContent>
               </Card>
 
@@ -512,12 +720,14 @@ export default function PreviewPage() {
                       {translate({ zh: "导出", en: "Export" })}
                     </Button>
                   </div>
-                  <Button onClick={placeOrder} size="lg" className="w-full">
+                  <Button onClick={placeOrder} size="lg" className="w-full" disabled={isSubmitting}>
                     <ShoppingCart className="w-5 h-5 mr-2" />
-                    {translate({
-                      zh: `下单 - $${(designData.selections.price + 5 + 7.99).toFixed(2)}`,
-                      en: `Place Order - $${(designData.selections.price + 5 + 7.99).toFixed(2)}`,
-                    })}
+                    {isSubmitting
+                      ? translate({ zh: "下单中...", en: "Placing order..." })
+                      : translate({
+                          zh: `下单 - $${estimatedTotal.toFixed(2)}`,
+                          en: `Place Order - $${estimatedTotal.toFixed(2)}`,
+                        })}
                   </Button>
                   <p className="text-xs text-muted-foreground text-center">
                     {translate({

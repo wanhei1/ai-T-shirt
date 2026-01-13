@@ -4,12 +4,20 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const connectToDatabase = async () => {
-    const pool = new Pool({
+    const poolConfig: any = {
         connectionString: process.env.DATABASE_URL,
         max: 20, // 最大连接数
         idleTimeoutMillis: 30000, // 连接空闲时间（毫秒）
-        connectionTimeoutMillis: 2000, // 连接超时时间（毫秒）
-    });
+        connectionTimeoutMillis: 10000, // 连接超时时间（毫秒）
+    };
+
+    if (process.env.DATABASE_URL && process.env.DATABASE_URL.includes('sslmode=require')) {
+        poolConfig.ssl = {
+            rejectUnauthorized: false // Neon DB requires SSL but often self-signed in dev/pooler
+        };
+    }
+
+    const pool = new Pool(poolConfig);
 
     try {
         const client = await pool.connect();

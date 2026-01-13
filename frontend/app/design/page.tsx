@@ -45,12 +45,6 @@ const tshirtStyles = [
 const colors = [
   { id: "white", name: { zh: "白色", en: "White" }, hex: "#FFFFFF", border: true },
   { id: "black", name: { zh: "黑色", en: "Black" }, hex: "#000000" },
-  { id: "navy", name: { zh: "海军蓝", en: "Navy" }, hex: "#1E3A8A" },
-  { id: "gray", name: { zh: "灰色", en: "Gray" }, hex: "#6B7280" },
-  { id: "red", name: { zh: "红色", en: "Red" }, hex: "#DC2626" },
-  { id: "green", name: { zh: "绿色", en: "Green" }, hex: "#059669" },
-  { id: "blue", name: { zh: "蓝色", en: "Blue" }, hex: "#2563EB" },
-  { id: "purple", name: { zh: "紫色", en: "Purple" }, hex: "#7C3AED" },
 ];
 
 const sizes = ["XS", "S", "M", "L", "XL", "XXL"];
@@ -75,6 +69,8 @@ export default function DesignPage() {
       size: selectedSize,
       price: selectedStyleData?.price,
     };
+    // Starting a new design from step 1 should clear any previous canvas state
+    localStorage.removeItem("designData");
     localStorage.setItem("tshirtSelections", JSON.stringify(selections));
     router.push("/design/editor");
   };

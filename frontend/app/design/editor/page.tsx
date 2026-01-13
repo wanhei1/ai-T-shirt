@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useState, useRef } from "react"
+import { useEffect, useMemo, useRef, useState, useRef as useReactRef } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -30,29 +30,8 @@ import Image from "next/image"
 import { AIGenerator } from "@/components/design-tools/ai-generator"
 import { ImageUploader } from "@/components/design-tools/image-uploader"
 import { useLanguage, type LanguageText } from "@/contexts/language-context"
-
-interface DesignElement {
-  id: string
-  type: "text" | "image" | "ai-generated"
-  content: string
-  x: number
-  y: number
-  width: number
-  height: number
-  rotation: number
-  fontSize?: number
-  fontFamily?: string
-  color?: string
-  visible: boolean
-  side: "front" | "back"
-}
-
-interface TShirtSelections {
-  style: string
-  color: string
-  size: string
-  price: number
-}
+import { buildCanvasMeta, CANVAS_SIZE, getShirtColorHex, getShirtPhotoSrc, PRINT_AREA } from "@/lib/design-canvas"
+import type { DesignElement, TShirtSelections } from "@/types/design"
 
 const fonts = ["Arial", "Helvetica", "Times New Roman", "Georgia", "Verdana", "Courier New", "Impact", "Comic Sans MS"]
 
@@ -89,7 +68,23 @@ const colorLabels: Record<string, LanguageText> = {
 export default function DesignEditorPage() {
   const router = useRouter()
   const canvasRef = useRef<HTMLDivElement>(null)
+  const printAreaRef = useRef<HTMLDivElement>(null)
+  const hasLoadedDesignRef = useReactRef(false)
+  const hadStoredDesignRef = useRef(false)
+  const hasUserEditedRef = useRef(false)
+  const persistTimerRef = useRef<number | null>(null)
+  const designElementsRef = useRef<DesignElement[]>([])
+  const selectedElementRef = useRef<string | null>(null)
+  const isDraggingRef = useRef(false)
+  const isResizingRef = useRef(false)
+  const isRotatingRef = useRef(false)
+  const dragStartRef = useRef({ x: 0, y: 0 })
+  const dragElementStartRef = useRef({ x: 0, y: 0 })
+  const resizeStartRef = useRef({ width: 0, height: 0 })
+  const canvasZoomRef = useRef(1)
+  const updateElementRef = useRef<(id: string, updates: Partial<DesignElement>) => void>(() => {})
   const { translate } = useLanguage()
+  const [hydrated, setHydrated] = useState(false)
   const [selections] = useState<TShirtSelections | null>(() => {
     if (typeof window === "undefined") {
       return null
@@ -110,7 +105,7 @@ export default function DesignEditorPage() {
   const [selectedElement, setSelectedElement] = useState<string | null>(null)
   const [showFront, setShowFront] = useState(true)
   const [textInput, setTextInput] = useState("")
-  const [fontSize, setFontSize] = useState([24])
+  const [fontSize, setFontSize] = useState<number[]>([24])
   const [selectedFont, setSelectedFont] = useState("Arial")
   const [selectedColor, setSelectedColor] = useState("#000000")
 
@@ -122,6 +117,121 @@ export default function DesignEditorPage() {
   const [dragElementStart, setDragElementStart] = useState({ x: 0, y: 0 })
   const [resizeStart, setResizeStart] = useState({ width: 0, height: 0 })
 
+  useEffect(() => {
+    designElementsRef.current = designElements
+  }, [designElements])
+
+  useEffect(() => {
+    selectedElementRef.current = selectedElement
+  }, [selectedElement])
+
+  useEffect(() => {
+    isDraggingRef.current = isDragging
+    isResizingRef.current = isResizing
+    isRotatingRef.current = isRotating
+  }, [isDragging, isResizing, isRotating])
+
+  useEffect(() => {
+    dragStartRef.current = dragStart
+  }, [dragStart])
+
+  useEffect(() => {
+    dragElementStartRef.current = dragElementStart
+  }, [dragElementStart])
+
+  useEffect(() => {
+    resizeStartRef.current = resizeStart
+  }, [resizeStart])
+
+  useEffect(() => {
+    canvasZoomRef.current = canvasZoom
+  }, [canvasZoom])
+
+  const canvasMeta = useMemo(() => buildCanvasMeta(selections?.color), [selections])
+  const printArea = canvasMeta.printArea
+  const shirtFill = useMemo(() => getShirtColorHex(selections?.color), [selections])
+  const shirtPhotoSrc = useMemo(() => getShirtPhotoSrc(selections?.color), [selections])
+  const titleText = useMemo(() => {
+    if (!hydrated) {
+      return translate({ zh: "定制 T 恤", en: "Custom T-Shirt" })
+    }
+    return translate({
+      zh: `${getStyleLabel(selections?.style)} T 恤 - ${getColorLabel(selections?.color)}`,
+      en: `${getStyleLabel(selections?.style)} T-Shirt - ${getColorLabel(selections?.color)}`,
+    })
+  }, [hydrated, selections, translate])
+  const sizeLabel = useMemo(() => {
+    if (!hydrated) return "..."
+    return selections?.size ?? "..."
+  }, [hydrated, selections])
+
+  useEffect(() => {
+    setHydrated(true)
+  }, [])
+
+  // Load persisted design (from preview or prior edit) once after hydration
+  useEffect(() => {
+    if (!hydrated || hasLoadedDesignRef.current) return
+    const storedDesign = typeof window !== "undefined" ? window.localStorage.getItem("designData") : null
+    if (storedDesign) {
+      try {
+        const parsed = JSON.parse(storedDesign) as { elements?: DesignElement[] }
+        if (Array.isArray(parsed.elements) && parsed.elements.length > 0) {
+          setDesignElements(parsed.elements)
+          hadStoredDesignRef.current = true
+        }
+      } catch (error) {
+        console.error("Failed to load design data", error)
+      }
+    }
+    hasLoadedDesignRef.current = true
+  }, [hydrated, hasLoadedDesignRef])
+
+  // Persist design elements while editing so navigating to preview/back keeps the state
+  useEffect(() => {
+    // Avoid overwriting saved designs with an empty state before initial load completes
+    if (!hydrated || !hasLoadedDesignRef.current) return
+    // During drag/resize/rotate, skip persistence to avoid jank
+    if (isDragging || isResizing || isRotating) return
+    // If we loaded a stored design but the current state is still empty and user hasn't edited, don't wipe it.
+    if (designElements.length === 0 && hadStoredDesignRef.current && !hasUserEditedRef.current) {
+      return
+    }
+
+    if (persistTimerRef.current) {
+      window.clearTimeout(persistTimerRef.current)
+    }
+
+    persistTimerRef.current = window.setTimeout(() => {
+      const sides = {
+        front: designElements.filter((el) => el.side === "front"),
+        back: designElements.filter((el) => el.side === "back"),
+      }
+      const category = (() => {
+        try {
+          const raw = window.localStorage.getItem("designCategory")
+          return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null
+        } catch {
+          return null
+        }
+      })()
+      const designData = {
+        category,
+        selections,
+        elements: designElements,
+        sides,
+        canvas: { ...canvasMeta },
+      }
+      window.localStorage.setItem("designData", JSON.stringify(designData))
+    }, 150)
+
+    return () => {
+      if (persistTimerRef.current) {
+        window.clearTimeout(persistTimerRef.current)
+      }
+    }
+  }, [designElements, selections, canvasMeta, hydrated, isDragging, isResizing, isRotating])
+
   const handleMouseDown = (e: React.MouseEvent, elementId: string, action: "drag" | "resize" | "rotate" = "drag") => {
     e.preventDefault()
     e.stopPropagation()
@@ -129,61 +239,119 @@ export default function DesignEditorPage() {
     const element = designElements.find((el) => el.id === elementId)
     if (!element) return
 
+    selectedElementRef.current = elementId
     setSelectedElement(elementId)
-    setDragStart({ x: e.clientX, y: e.clientY })
+
+    const nextDragStart = { x: e.clientX, y: e.clientY }
+    dragStartRef.current = nextDragStart
+    setDragStart(nextDragStart)
 
     if (action === "drag") {
+      isDraggingRef.current = true
       setIsDragging(true)
-      setDragElementStart({ x: element.x, y: element.y })
+
+      const start = { x: element.x, y: element.y }
+      dragElementStartRef.current = start
+      setDragElementStart(start)
     } else if (action === "resize") {
+      isResizingRef.current = true
       setIsResizing(true)
-      setResizeStart({ width: element.width, height: element.height })
+
+      const start = { width: element.width, height: element.height }
+      resizeStartRef.current = start
+      setResizeStart(start)
     } else if (action === "rotate") {
+      isRotatingRef.current = true
       setIsRotating(true)
     }
   }
 
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (!selectedElement) return
+    applyPointerMove(e.clientX, e.clientY)
+  }
 
-    const element = designElements.find((el) => el.id === selectedElement)
+  const applyPointerMove = (clientX: number, clientY: number) => {
+    const selectedId = selectedElementRef.current
+    if (!selectedId || (!isDraggingRef.current && !isResizingRef.current && !isRotatingRef.current)) return
+
+    const element = designElementsRef.current.find((el) => el.id === selectedId)
     if (!element) return
 
-    if (isDragging) {
-      const deltaX = (e.clientX - dragStart.x) / canvasZoom
-      const deltaY = (e.clientY - dragStart.y) / canvasZoom
+    const zoom = canvasZoomRef.current || 1
+    const dragStartPoint = dragStartRef.current
 
-      const newX = Math.max(0, Math.min(300, dragElementStart.x + deltaX))
-      const newY = Math.max(0, Math.min(400, dragElementStart.y + deltaY))
+    if (isDraggingRef.current) {
+      const deltaX = (clientX - dragStartPoint.x) / zoom
+      const deltaY = (clientY - dragStartPoint.y) / zoom
 
-      updateElement(selectedElement, { x: newX, y: newY })
-    } else if (isResizing) {
-      const deltaX = (e.clientX - dragStart.x) / canvasZoom
-      const deltaY = (e.clientY - dragStart.y) / canvasZoom
+      // Allow moving outside the print area, while keeping a small portion visible for easy recovery.
+      const minVisibleX = Math.min(30, Math.max(10, element.width * 0.25))
+      const minVisibleY = Math.min(30, Math.max(10, element.height * 0.25))
+      const minX = -element.width + minVisibleX
+      const maxX = printArea.width - minVisibleX
+      const minY = -element.height + minVisibleY
+      const maxY = printArea.height - minVisibleY
 
-      const newWidth = Math.max(30, Math.min(300, resizeStart.width + deltaX))
-      const newHeight = Math.max(20, Math.min(300, resizeStart.height + deltaY))
+      const start = dragElementStartRef.current
+      const newX = Math.max(minX, Math.min(maxX, start.x + deltaX))
+      const newY = Math.max(minY, Math.min(maxY, start.y + deltaY))
 
-      updateElement(selectedElement, { width: newWidth, height: newHeight })
-    } else if (isRotating) {
-      const rect = canvasRef.current?.getBoundingClientRect()
+      updateElementRef.current(selectedId, { x: newX, y: newY })
+    } else if (isResizingRef.current) {
+      const deltaX = (clientX - dragStartPoint.x) / zoom
+      const deltaY = (clientY - dragStartPoint.y) / zoom
+
+      // Keep resizing bounded to avoid extreme values, but allow it to extend beyond the print area (it will be clipped).
+      const maxWidth = printArea.width * 2
+      const maxHeight = printArea.height * 2
+
+      const start = resizeStartRef.current
+      const newWidth = Math.max(30, Math.min(maxWidth, start.width + deltaX))
+      const newHeight = Math.max(20, Math.min(maxHeight, start.height + deltaY))
+
+      updateElementRef.current(selectedId, { width: newWidth, height: newHeight })
+    } else if (isRotatingRef.current) {
+      const rect = printAreaRef.current?.getBoundingClientRect()
       if (!rect) return
 
-      const centerX = rect.left + (element.x + element.width / 2) * canvasZoom
-      const centerY = rect.top + (element.y + element.height / 2) * canvasZoom
+      const centerX = rect.left + (element.x + element.width / 2) * zoom
+      const centerY = rect.top + (element.y + element.height / 2) * zoom
 
-      const angle = Math.atan2(e.clientY - centerY, e.clientX - centerX)
+      const angle = Math.atan2(clientY - centerY, clientX - centerX)
       const degrees = (angle * 180) / Math.PI + 90
 
-      updateElement(selectedElement, { rotation: degrees })
+      updateElementRef.current(selectedId, { rotation: degrees })
     }
   }
 
   const handleMouseUp = () => {
+    isDraggingRef.current = false
+    isResizingRef.current = false
+    isRotatingRef.current = false
     setIsDragging(false)
     setIsResizing(false)
     setIsRotating(false)
   }
+
+  useEffect(() => {
+    if (!isDragging && !isResizing && !isRotating) return
+
+    const onMove = (e: MouseEvent) => {
+      applyPointerMove(e.clientX, e.clientY)
+    }
+
+    const onUp = () => {
+      handleMouseUp()
+    }
+
+    window.addEventListener("mousemove", onMove)
+    window.addEventListener("mouseup", onUp)
+
+    return () => {
+      window.removeEventListener("mousemove", onMove)
+      window.removeEventListener("mouseup", onUp)
+    }
+  }, [isDragging, isResizing, isRotating])
 
   const handleZoomIn = () => {
     setCanvasZoom((prev) => Math.min(2, prev + 0.1))
@@ -208,14 +376,19 @@ export default function DesignEditorPage() {
   const addTextElement = () => {
     if (!textInput.trim()) return
 
+    hasUserEditedRef.current = true
+
+    const width = Math.min(printArea.width, 200)
+    const height = 50
+
     const newElement: DesignElement = {
       id: Date.now().toString(),
       type: "text",
       content: textInput,
-      x: 150,
-      y: 150,
-      width: 200,
-      height: 50,
+      x: (printArea.width - width) / 2,
+      y: (printArea.height - height) / 2,
+      width,
+      height,
       rotation: 0,
       fontSize: fontSize[0],
       fontFamily: selectedFont,
@@ -229,14 +402,18 @@ export default function DesignEditorPage() {
   }
 
   const addImageElement = (imageSrc: string, type: "image" | "ai-generated" = "image") => {
+    const size = Math.min(printArea.width, 180)
+
+    hasUserEditedRef.current = true
+
     const newElement: DesignElement = {
       id: Date.now().toString(),
       type,
       content: imageSrc,
-      x: 100,
-      y: 100,
-      width: 150,
-      height: 150,
+      x: (printArea.width - size) / 2,
+      y: (printArea.height - size) / 2,
+      width: size,
+      height: size,
       rotation: 0,
       visible: true,
       side: showFront ? "front" : "back",
@@ -246,10 +423,16 @@ export default function DesignEditorPage() {
   }
 
   const updateElement = (id: string, updates: Partial<DesignElement>) => {
+    hasUserEditedRef.current = true
     setDesignElements((elements) => elements.map((el) => (el.id === id ? { ...el, ...updates } : el)))
   }
 
+  useEffect(() => {
+    updateElementRef.current = updateElement
+  }, [updateElement])
+
   const deleteElement = (id: string) => {
+    hasUserEditedRef.current = true
     setDesignElements((elements) => elements.filter((el) => el.id !== id))
     if (selectedElement === id) {
       setSelectedElement(null)
@@ -258,7 +441,7 @@ export default function DesignEditorPage() {
 
   const selectedElementData = designElements.find((el) => el.id === selectedElement)
 
-  const getStyleLabel = (styleId?: string) => {
+  function getStyleLabel(styleId?: string) {
     if (!styleId) {
       return ""
     }
@@ -266,7 +449,7 @@ export default function DesignEditorPage() {
     return label ? translate(label) : styleId
   }
 
-  const getColorLabel = (colorId?: string) => {
+  function getColorLabel(colorId?: string) {
     if (!colorId) {
       return ""
     }
@@ -284,6 +467,11 @@ export default function DesignEditorPage() {
     const designData = {
       selections,
       elements: designElements,
+      sides: {
+        front: designElements.filter((el) => el.side === "front"),
+        back: designElements.filter((el) => el.side === "back"),
+      },
+      canvas: { ...canvasMeta },
     }
     localStorage.setItem("designData", JSON.stringify(designData))
     router.push("/design/preview")
@@ -470,7 +658,7 @@ export default function DesignEditorPage() {
                       value={[selectedElementData.width]}
                       onValueChange={([width]: number[]) =>
                         updateElement(selectedElementData.id, { width })}
-                      max={300}
+                      max={printArea.width}
                       min={50}
                       step={5}
                       className="mt-2"
@@ -487,7 +675,7 @@ export default function DesignEditorPage() {
                       value={[selectedElementData.height]}
                       onValueChange={([height]: number[]) =>
                         updateElement(selectedElementData.id, { height })}
-                      max={300}
+                      max={printArea.height}
                       min={20}
                       step={5}
                       className="mt-2"
@@ -531,13 +719,8 @@ export default function DesignEditorPage() {
           <div className="border-b border-border p-4 bg-card/30">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4">
-                <h3 className="font-semibold">
-                  {translate({
-                    zh: `${getStyleLabel(selections?.style)} T 恤 - ${getColorLabel(selections?.color)}`,
-                    en: `${getStyleLabel(selections?.style)} T-Shirt - ${getColorLabel(selections?.color)}`,
-                  })}
-                </h3>
-                <Badge variant="outline">{selections?.size}</Badge>
+                <h3 className="font-semibold">{titleText}</h3>
+                <Badge variant="outline">{sizeLabel}</Badge>
               </div>
               <div className="flex items-center gap-2">
                 <div className="flex items-center gap-1 mr-4">
@@ -571,25 +754,60 @@ export default function DesignEditorPage() {
 
             {/* Canvas */}
             <div className="flex-1 p-8 bg-muted/20 overflow-auto">
-              <div className="max-w-md mx-auto">
+              <div className="max-w-md mx-auto flex justify-center">
                 <div
                   ref={canvasRef}
-                  className="relative bg-white rounded-lg shadow-lg aspect-[3/4] border-2 border-border overflow-hidden select-none"
+                  className="relative select-none"
                   style={{
-                    backgroundColor:
-                      selections?.color === "white" ? "#FFFFFF" : selections?.color === "black" ? "#000000" : "#F3F4F6",
+                    width: CANVAS_SIZE.width,
+                    height: CANVAS_SIZE.height,
                     transform: `scale(${canvasZoom})`,
                     transformOrigin: "center",
                   }}
-                  onMouseMove={handleMouseMove}
-                  onMouseUp={handleMouseUp}
-                  onMouseLeave={handleMouseUp}
                 >
-                  {/* T-shirt outline/template */}
-                  <div className="absolute inset-4 border border-dashed border-gray-300 rounded-lg opacity-30" />
+                  {shirtPhotoSrc ? (
+                    <Image
+                      src={shirtPhotoSrc}
+                      alt={translate({ zh: "T 恤底图", en: "T-shirt base" })}
+                      fill
+                      className="object-contain drop-shadow-md"
+                      draggable={false}
+                      priority
+                      unoptimized
+                    />
+                  ) : (
+                    <svg
+                      aria-hidden
+                      viewBox="0 0 200 200"
+                      className="absolute inset-0 w-full h-full drop-shadow-md"
+                      role="presentation"
+                    >
+                      <path
+                        d="M70 30 L90 30 Q100 50 110 30 L130 30 Q145 30 150 45 L175 75 L155 95 L155 165 L45 165 L45 95 L25 75 L50 45 Q55 30 70 30 Z"
+                        fill={shirtFill}
+                        stroke="#444"
+                        strokeWidth={2}
+                        strokeLinejoin="round"
+                        strokeLinecap="round"
+                      />
+                    </svg>
+                  )}
 
-                  {/* Design Elements */}
-                  {visibleCurrentElements.map((element) => (
+                  <div
+                    ref={printAreaRef}
+                    className="absolute border-2 border-dashed border-gray-300/80 rounded-md overflow-hidden bg-white/80 backdrop-blur-sm shadow-sm"
+                    style={{
+                      left: printArea.x,
+                      top: printArea.y,
+                      width: printArea.width,
+                      height: printArea.height,
+                    }}
+                    onMouseMove={handleMouseMove}
+                    onMouseUp={handleMouseUp}
+                  >
+                    <div className="absolute inset-0 pointer-events-none border border-white/50 rounded" />
+
+                    {visibleCurrentElements.map((element) => (
                       <div
                         key={element.id}
                         className={`absolute cursor-move border-2 transition-colors ${
@@ -600,8 +818,7 @@ export default function DesignEditorPage() {
                           top: element.y,
                           width: element.width,
                           height: element.height,
-                          transform: `rotate(${element.rotation}deg)`,
-                          userSelect: "none",
+                          transform: `rotate(${element.rotation}deg)`
                         }}
                         onMouseDown={(e) => handleMouseDown(e, element.id, "drag")}
                         onClick={(e) => {
@@ -635,7 +852,6 @@ export default function DesignEditorPage() {
 
                         {selectedElement === element.id && (
                           <>
-                            {/* Corner resize handles */}
                             <div
                               className="absolute -top-2 -left-2 w-4 h-4 bg-primary rounded-full cursor-nw-resize border-2 border-white shadow-md hover:scale-110 transition-transform"
                               onMouseDown={(e) => handleMouseDown(e, element.id, "resize")}
@@ -653,55 +869,53 @@ export default function DesignEditorPage() {
                               onMouseDown={(e) => handleMouseDown(e, element.id, "resize")}
                             />
 
-                            {/* Rotation handle */}
                             <div
                               className="absolute -top-8 left-1/2 transform -translate-x-1/2 w-4 h-4 bg-green-500 rounded-full cursor-grab border-2 border-white shadow-md hover:scale-110 transition-transform"
                               onMouseDown={(e) => handleMouseDown(e, element.id, "rotate")}
                               title={translate({ zh: "拖曳以旋转", en: "Drag to rotate" })}
                             />
 
-                            {/* Center indicator */}
                             <div className="absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 w-2 h-2 bg-primary rounded-full opacity-50" />
                           </>
                         )}
                       </div>
                     ))}
 
-                  {/* Empty state */}
-                  {currentSideElements.length === 0 && (
-                    <div className="absolute inset-0 flex items-center justify-center text-muted-foreground pointer-events-none">
-                      <div className="text-center">
-                        <Palette className="w-12 h-12 mx-auto mb-4 opacity-50" />
-                        <p className="text-sm">
-                          {translate({
-                            zh: `开始设计 T 恤的${showFront ? "前面" : "背面"}`,
-                            en: `Start designing the ${showFront ? "front" : "back"} of your T-shirt`,
-                          })}
-                        </p>
-                        <p className="text-xs">
-                          {translate({ zh: "使用左侧工具添加元素", en: "Use the tools on the left to add elements" })}
-                        </p>
-                        {otherSideCount > 0 && (
-                          <p className="text-xs mt-2 text-primary">
+                    {currentSideElements.length === 0 && (
+                      <div className="absolute inset-0 flex items-center justify-center text-muted-foreground pointer-events-none">
+                        <div className="text-center">
+                          <Palette className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                          <p className="text-sm">
                             {translate({
-                              zh: `💡 切换到${showFront ? "背面" : "前面"}查看其他设计`,
-                              en: `💡 Switch to the ${showFront ? "back" : "front"} to see your other designs`,
+                              zh: `开始设计 T 恤的${showFront ? "前面" : "背面"}`,
+                              en: `Start designing the ${showFront ? "front" : "back"} of your T-shirt`,
                             })}
                           </p>
-                        )}
+                          <p className="text-xs">
+                            {translate({ zh: "使用左侧工具添加元素", en: "Use the tools on the left to add elements" })}
+                          </p>
+                          {otherSideCount > 0 && (
+                            <p className="text-xs mt-2 text-primary">
+                              {translate({
+                                zh: `💡 切换到${showFront ? "背面" : "前面"}查看其他设计`,
+                                en: `💡 Switch to the ${showFront ? "back" : "front"} to see your other designs`,
+                              })}
+                            </p>
+                          )}
+                        </div>
                       </div>
-                    </div>
-                  )}
+                    )}
+                  </div>
                 </div>
+              </div>
 
-                <div className="mt-4 text-center text-sm text-muted-foreground">
-                  <p>
-                    {translate({
-                      zh: "💡 点击选择 • 拖动移动 • 拖动边角缩放 • 拖动绿色把手旋转",
-                      en: "💡 Click to select • Drag to move • Drag corners to resize • Drag green handle to rotate",
-                    })}
-                  </p>
-                </div>
+              <div className="mt-4 text-center text-sm text-muted-foreground">
+                <p>
+                  {translate({
+                    zh: "💡 画布采用服装轮廓，元素被中心虚线框裁剪。点击选择 • 拖动移动 • 拖动边角缩放 • 拖动绿色把手旋转",
+                    en: "💡 Elements are clipped inside the dashed print area. Click to select • Drag to move • Drag corners to resize • Drag green handle to rotate",
+                  })}
+                </p>
               </div>
             </div>
           </div>

@@ -3,6 +3,128 @@ import { SimpleComfyUIClient } from "@/lib/simple-comfyui-client"
 import { writeFile } from "fs/promises"
 import path from "path"
 
+// --- Membership gate helpers (server-side) ---
+
+const apiUrlsString = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8189"
+const potentialApiUrls = apiUrlsString
+  .split(",")
+  .map((url) => url.trim())
+  .filter(Boolean)
+
+let determinedApiBaseUrl: string | null = null
+
+async function getBackendBaseUrl(): Promise<string> {
+  if (determinedApiBaseUrl) return determinedApiBaseUrl
+
+  for (const baseUrl of potentialApiUrls) {
+    try {
+      const healthUrl = new URL("/health", baseUrl).toString()
+      const response = await fetch(healthUrl, {
+        method: "GET",
+        signal: AbortSignal.timeout(3000),
+        cache: "no-store",
+      })
+      if (response.ok) {
+        determinedApiBaseUrl = baseUrl
+        return baseUrl
+      }
+    } catch {
+      // ignore and try next
+    }
+  }
+
+  determinedApiBaseUrl = potentialApiUrls[0] || "http://localhost:8189"
+  return determinedApiBaseUrl
+}
+
+type MembershipRecord = {
+  status?: string
+  expires_at?: string | null
+}
+
+function isMembershipActive(membership: MembershipRecord | null | undefined): boolean {
+  if (!membership) return false
+  if (membership.status && membership.status !== "active") return false
+  if (!membership.expires_at) return true
+  return new Date(membership.expires_at).getTime() >= Date.now()
+}
+
+async function requireActiveMembership(req: NextRequest) {
+  const authHeader = req.headers.get("authorization") || ""
+  const token = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : ""
+
+  if (!token) {
+    return {
+      ok: false as const,
+      status: 401,
+      body: {
+        success: false,
+        code: "AUTH_REQUIRED",
+        error: "Authentication required",
+        zh: "请先登录",
+      },
+    }
+  }
+
+  const baseUrl = await getBackendBaseUrl()
+  const endpoint = new URL("/api/memberships/me", baseUrl).toString()
+
+  let response: Response
+  try {
+    response = await fetch(endpoint, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+      signal: AbortSignal.timeout(5000),
+      cache: "no-store",
+    })
+  } catch (error) {
+    return {
+      ok: false as const,
+      status: 503,
+      body: {
+        success: false,
+        code: "BACKEND_UNAVAILABLE",
+        error: error instanceof Error ? error.message : "Backend unavailable",
+        zh: "后端服务不可用",
+      },
+    }
+  }
+
+  if (!response.ok) {
+    // Most likely token invalid/expired
+    return {
+      ok: false as const,
+      status: response.status === 401 ? 401 : 403,
+      body: {
+        success: false,
+        code: "AUTH_INVALID",
+        error: "Invalid authentication",
+        zh: "登录已失效，请重新登录",
+      },
+    }
+  }
+
+  const json = (await response.json().catch(() => null)) as { membership?: MembershipRecord | null } | null
+  const membership = json?.membership ?? null
+
+  if (!isMembershipActive(membership)) {
+    return {
+      ok: false as const,
+      status: 403,
+      body: {
+        success: false,
+        code: "MEMBERSHIP_REQUIRED",
+        error: "Active membership required",
+        zh: "需要开通会员才能使用 AI 生图功能",
+      },
+    }
+  }
+
+  return { ok: true as const }
+}
+
 // 样式配置
 const styleConfigs: Record<string, {
   negativePrompt: string
@@ -99,7 +221,10 @@ async function generateWithComfyUI(prompt: string, style: string): Promise<strin
       width: 512,
       height: 512,
       steps: 20,
-      cfg: 7
+      cfg: 7,
+      // Allow overriding model via env var; default to a safetensors checkpoint.
+      // This avoids failures like: "Could not detect model type" for some .ckpt files.
+      modelName: process.env.COMFYUI_MODEL_NAME || "dreamshaper_8.safetensors"
     }
   )
 
@@ -113,6 +238,12 @@ async function generateWithComfyUI(prompt: string, style: string): Promise<strin
 
 export async function POST(request: NextRequest) {
   try {
+    // Membership gate: ComfyUI generation requires an active membership.
+    const gate = await requireActiveMembership(request)
+    if (!gate.ok) {
+      return NextResponse.json(gate.body, { status: gate.status })
+    }
+
     const { prompt, style = "realistic", width = 512, height = 512 } = await request.json()
 
     if (!prompt) {

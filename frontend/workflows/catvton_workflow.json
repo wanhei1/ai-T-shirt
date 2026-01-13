@@ -1,0 +1,77 @@
+{
+  "10": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "__PERSON_IMAGE__"
+    }
+  },
+  "11": {
+    "class_type": "LoadImage",
+    "inputs": {
+      "image": "__CLOTH_IMAGE__"
+    }
+  },
+  "12": {
+    "class_type": "LoadAutoMasker",
+    "inputs": {
+      "catvton_path": "__CATVTON_PATH__"
+    }
+  },
+  "13": {
+    "class_type": "AutoMasker",
+    "inputs": {
+      "pipe": [
+        "12",
+        0
+      ],
+      "target_image": [
+        "10",
+        0
+      ],
+      "cloth_type": "overall"
+    }
+  },
+  "17": {
+    "class_type": "LoadCatVTONPipeline",
+    "inputs": {
+      "sd15_inpaint_path": "__SD15_INPAINT_PATH__",
+      "catvton_path": "__CATVTON_PATH__",
+      "mixed_precision": "bf16",
+      "vae_path": "__VAE_PATH__"
+    }
+  },
+  "16": {
+    "class_type": "CatVTON",
+    "inputs": {
+      "pipe": [
+        "17",
+        0
+      ],
+      "target_image": [
+        "10",
+        0
+      ],
+      "refer_image": [
+        "11",
+        0
+      ],
+      "mask_image": [
+        "13",
+        0
+      ],
+      "seed": 42,
+      "steps": 50,
+      "cfg": 2.5
+    }
+  },
+  "25": {
+    "class_type": "SaveImage",
+    "inputs": {
+      "filename_prefix": "tryon",
+      "images": [
+        "16",
+        0
+      ]
+    }
+  }
+}

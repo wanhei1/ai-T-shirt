@@ -1,6 +1,6 @@
 "use client";
 /* 主页 */
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -10,6 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import {
   Sparkles,
   Type,
@@ -30,11 +31,27 @@ type MembershipRecord = {
   expires_at?: string | null;
 };
 
+type OrderRecord = {
+  id: number | string;
+  created_at: string;
+  selections?: Record<string, any>;
+  design?: any;
+  canvas_front?: string | null;
+  canvas_back?: string | null;
+  canvas_meta?: any;
+};
+
 export default function HomePage() {
   const { user } = useAuth();
   const { translate } = useLanguage();
   const [membership, setMembership] = useState<MembershipRecord | null>(null);
   const [isLoadingMembership, setIsLoadingMembership] = useState(false);
+
+  const [myOrders, setMyOrders] = useState<OrderRecord[] | null>(null);
+  const [isLoadingOrders, setIsLoadingOrders] = useState(false);
+  const [activeOrder, setActiveOrder] = useState<OrderRecord | null>(null);
+  const sliderRef = useRef<HTMLDivElement>(null);
+  const marqueeRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     let isMounted = true;
@@ -71,6 +88,46 @@ export default function HomePage() {
     };
   }, [user]);
 
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadOrders = async () => {
+      if (!user) {
+        setMyOrders(null);
+        return;
+      }
+
+      try {
+        setIsLoadingOrders(true);
+        const { apiClient } = await import("@/lib/api-client");
+        const response = await apiClient.getOrders();
+        if (isMounted) {
+          setMyOrders((response.orders || []) as OrderRecord[]);
+        }
+      } catch (error) {
+        if (isMounted) {
+          console.warn("Failed to fetch orders", error);
+          setMyOrders([]);
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingOrders(false);
+        }
+      }
+    };
+
+    loadOrders();
+    return () => {
+      isMounted = false;
+    };
+  }, [user]);
+
+  // Auto-scrolling marquee ticker; duplicates items and uses CSS animation for smoother loop
+  const marqueeDuration = useMemo(() => {
+    if (!myOrders || myOrders.length === 0) return 20;
+    return Math.max(16, myOrders.length * 4);
+  }, [myOrders]);
+
   const hasActiveMembership = useMemo(() => {
     if (!membership) return false;
     if (membership.status && membership.status !== "active") return false;
@@ -83,6 +140,21 @@ export default function HomePage() {
     if (isLoadingMembership) return false;
     return !hasActiveMembership;
   }, [user, isLoadingMembership, hasActiveMembership]);
+
+  const getOrderPreviews = (order?: OrderRecord | null) => {
+    const elements = order?.design?.elements || [];
+    const firstImage = elements.find((el: any) => el?.type === "image" || el?.type === "ai-generated");
+    return {
+      front: order?.canvas_front || order?.design?.canvas?.snapshots?.front || firstImage?.content || null,
+      back: order?.canvas_back || order?.design?.canvas?.snapshots?.back || null,
+    };
+  };
+
+  const loopOrders = useMemo(() => {
+    if (!myOrders || myOrders.length === 0) return [] as OrderRecord[];
+    // Triple duplication plus translateX(-33.333%) yields a seamless marquee without a jump
+    return [...myOrders, ...myOrders, ...myOrders];
+  }, [myOrders]);
 
   const featureCards = [
     {
@@ -215,12 +287,11 @@ export default function HomePage() {
                 </Button>
                 <Button
                   size="lg"
-                  variant="outline"
                   asChild
-                  className="text-lg px-8 bg-transparent"
+                  className="text-lg px-8 bg-yellow-500 hover:bg-yellow-600 text-black"
                 >
-                  <Link href="#gallery">
-                    {translate({ zh: "查看画廊", en: "View Gallery" })}
+                  <Link href="/shop">
+                    {translate({ zh: "进入商城", en: "Enter Shop" })}
                   </Link>
                 </Button>
               </div>
@@ -263,6 +334,110 @@ export default function HomePage() {
                   {translate({ zh: "试用演示", en: "Try Demo" })}
                 </Link>
               </Button>
+              <Button
+                size="lg"
+                asChild
+                className="text-lg px-8 bg-yellow-500 hover:bg-yellow-600 text-black"
+              >
+                <Link href="/shop">
+                  {translate({ zh: "进入商城", en: "Enter Shop" })}
+                </Link>
+              </Button>
+            </div>
+          )}
+        </div>
+      </section>
+
+      {/* My Designs Showcase */}
+      <section className="py-16 px-4 bg-muted/10">
+        <div className="container mx-auto">
+          <div className="flex items-center justify-between gap-4 mb-6">
+            <div>
+              <h2 className="text-3xl md:text-4xl font-bold mb-2">
+                {translate({ zh: "我的衣服展示区", en: "My Design Showcase" })}
+              </h2>
+              <p className="text-muted-foreground">
+                {translate({ zh: "展示已下单的正面画布，自动横向滑动", en: "Auto-scrolling row of your ordered front canvases" })}
+              </p>
+            </div>
+            <div className="flex gap-3">
+              <Button variant="outline" asChild className="bg-transparent">
+                <Link href="/design">{translate({ zh: "继续创作", en: "Keep Designing" })}</Link>
+              </Button>
+            </div>
+          </div>
+
+          {!user ? (
+            <Card>
+              <CardContent className="py-10 text-center text-muted-foreground">
+                {translate({ zh: "登录后可查看你的设计滑动展示", en: "Log in to see your auto-scrolling designs" })}
+              </CardContent>
+            </Card>
+          ) : isLoadingOrders ? (
+            <Card>
+              <CardContent className="py-10 text-center text-muted-foreground">
+                {translate({ zh: "加载你的订单中...", en: "Loading your orders..." })}
+              </CardContent>
+            </Card>
+          ) : !myOrders || myOrders.length === 0 ? (
+            <Card>
+              <CardContent className="py-10 text-center text-muted-foreground">
+                {translate({ zh: "还没有下单的设计，去创作一个吧", en: "No orders yet — create your first design!" })}
+              </CardContent>
+            </Card>
+          ) : (
+            <div className="relative overflow-hidden pb-3">
+              <div
+                ref={marqueeRef}
+                className="flex gap-4 min-w-max animate-[marquee-slide_var(--marquee-duration)_linear_infinite] will-change-transform"
+                style={{
+                  // @ts-ignore custom properties for animation timing
+                  "--marquee-duration": `${marqueeDuration}s`,
+                  "--marquee-shift": "-33.333333%",
+                }}
+              >
+                {loopOrders.map((order, idx) => {
+                  const preview = getOrderPreviews(order);
+                  return (
+                    <Card
+                      key={`${order.id}-${idx}`}
+                      className="min-w-[240px] max-w-[240px] snap-start cursor-pointer hover:shadow-lg transition-shadow"
+                      onClick={() => setActiveOrder(order)}
+                    >
+                      <CardHeader>
+                        <CardTitle className="text-base">
+                          {translate({ zh: "我的设计", en: "My Design" })}
+                        </CardTitle>
+                        <CardDescription>
+                          {new Date(order.created_at).toLocaleString(translate({ zh: "zh-CN", en: "en-US" }))}
+                        </CardDescription>
+                      </CardHeader>
+                      <CardContent className="space-y-3">
+                        {preview.front ? (
+                          <img
+                            src={preview.front}
+                            alt={`order-${order.id}-front`}
+                            className="h-40 w-full rounded-md object-cover"
+                          />
+                        ) : (
+                          <div className="h-40 w-full rounded-md bg-muted flex items-center justify-center text-sm text-muted-foreground">
+                            {translate({ zh: "无预览图", en: "No preview" })}
+                          </div>
+                        )}
+                        <div className="text-xs text-muted-foreground">
+                          {translate({ zh: "点击查看正反面详情", en: "Click to view front/back" })}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  );
+                })}
+              </div>
+              <style jsx global>{`
+                @keyframes marquee-slide {
+                  0% { transform: translateX(0); }
+                  100% { transform: translateX(var(--marquee-shift)); }
+                }
+              `}</style>
             </div>
           )}
         </div>
@@ -325,6 +500,54 @@ export default function HomePage() {
           </div>
         </section>
       )}
+        <Dialog open={Boolean(activeOrder)} onOpenChange={(open) => {
+          if (!open) setActiveOrder(null);
+        }}>
+          <DialogContent className="max-w-3xl">
+            <DialogHeader>
+              <DialogTitle>{translate({ zh: "设计详情", en: "Design Details" })}</DialogTitle>
+            </DialogHeader>
+            {activeOrder && (
+              <div className="grid gap-4 md:grid-cols-2">
+                {(() => {
+                  const preview = getOrderPreviews(activeOrder);
+                  return (
+                    <>
+                      <div>
+                        <p className="text-sm text-muted-foreground mb-2">{translate({ zh: "正面", en: "Front" })}</p>
+                        {preview.front ? (
+                          <img
+                            src={preview.front}
+                            alt={`order-${activeOrder.id}-front-full`}
+                            className="w-full rounded-md object-cover"
+                          />
+                        ) : (
+                          <div className="h-60 w-full rounded-md bg-muted flex items-center justify-center text-sm text-muted-foreground">
+                            {translate({ zh: "无预览图", en: "No preview" })}
+                          </div>
+                        )}
+                      </div>
+                      <div>
+                        <p className="text-sm text-muted-foreground mb-2">{translate({ zh: "背面", en: "Back" })}</p>
+                        {preview.back ? (
+                          <img
+                            src={preview.back}
+                            alt={`order-${activeOrder.id}-back-full`}
+                            className="w-full rounded-md object-cover"
+                          />
+                        ) : (
+                          <div className="h-60 w-full rounded-md bg-muted flex items-center justify-center text-sm text-muted-foreground">
+                            {translate({ zh: "无预览图", en: "No preview" })}
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  );
+                })()}
+              </div>
+            )}
+          </DialogContent>
+        </Dialog>
 
       {/* Features Section */}
       <section id="features" className="py-20 px-4 bg-muted/30">
