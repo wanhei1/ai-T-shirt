@@ -3,7 +3,7 @@
  * 基于官方基础示例
  */
 
-export interface SimpleWorkflow {
+export interface SimpleWorkflow extends Record<string, unknown> {
   "3": {
     class_type: "KSampler"
     inputs: {
@@ -79,8 +79,7 @@ export interface SimpleHistoryItem {
   status: {
     status_str: string
     completed: boolean
-    // ComfyUI may return structured messages, not always strings.
-    messages: unknown[]
+    messages: string[]
   }
 }
 
@@ -206,7 +205,7 @@ export class SimpleComfyUIClient {
       steps = 20,
       cfg = 8,
       seed = Math.floor(Math.random() * 1000000),
-      modelName = "dreamshaper_8.safetensors",
+      modelName = "v1-5-pruned-emaonly.ckpt",
       samplerName = "euler",
       scheduler = "normal"
     } = options
@@ -353,42 +352,6 @@ export class SimpleComfyUIClient {
     filename: string
     subfolder: string
   }> {
-    const formatMessages = (messages: unknown): string => {
-      if (!messages) return ''
-
-      const toText = (value: unknown): string => {
-        if (typeof value === 'string') return value
-        if (value instanceof Error) return value.message
-        try {
-          return JSON.stringify(value)
-        } catch {
-          return String(value)
-        }
-      }
-
-      if (Array.isArray(messages)) {
-        return messages
-          .map((m) => {
-            // Common ComfyUI patterns:
-            // - ['execution_error', {...}]
-            // - { type: 'execution_error', data: {...} }
-            if (Array.isArray(m) && m.length >= 2 && typeof m[0] === 'string') {
-              return `${m[0]}: ${toText(m[1])}`
-            }
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const maybeObj: any = m
-            if (maybeObj && typeof maybeObj === 'object' && typeof maybeObj.type === 'string') {
-              return `${maybeObj.type}: ${toText(maybeObj.data ?? maybeObj)}`
-            }
-            return toText(m)
-          })
-          .filter(Boolean)
-          .join(', ')
-      }
-
-      return toText(messages)
-    }
-
     const startTime = Date.now()
     const pollInterval = 2000
 
@@ -401,33 +364,35 @@ export class SimpleComfyUIClient {
           
           // 检查是否完成
           if (item.status?.completed || item.outputs) {
-            // 查找生成的图像
+            const allImages: Array<{ filename: string; subfolder?: string; type?: string }> = []
+            const outputImages: Array<{ filename: string; subfolder?: string; type?: string }> = []
+
+            // 注意：ComfyUI 的 outputs 可能包含多个节点的 images，且遍历顺序不稳定。
+            // 为了避免拿到输入/遮罩预览图，优先选择 type === 'output' 的图片。
             for (const nodeId in item.outputs) {
               const output = item.outputs[nodeId]
               if (output.images && output.images.length > 0) {
-                const image = output.images[0]
-                return {
-                  filename: image.filename,
-                  subfolder: image.subfolder || ""
+                for (const image of output.images) {
+                  allImages.push(image)
+                  if (image.type === 'output') {
+                    outputImages.push(image)
+                  }
                 }
+              }
+            }
+
+            const picked = (outputImages[0] ?? allImages[0])
+            if (picked) {
+              return {
+                filename: picked.filename,
+                subfolder: picked.subfolder || ""
               }
             }
           }
           
           // 检查是否有错误
           if (item.status?.status_str === 'error') {
-            const details = formatMessages(item.status.messages)
-            throw new Error(
-              `生成失败 (prompt_id=${promptId}, server=${this.serverUrl}): ${details || '未知错误'}`
-            )
-          }
-
-          // Some ComfyUI builds keep status_str != 'error' but embed execution_error in messages.
-          const msgText = formatMessages(item.status?.messages)
-          if (msgText.includes('execution_error') || msgText.includes('ExecutionError')) {
-            throw new Error(
-              `生成失败 (prompt_id=${promptId}, server=${this.serverUrl}): ${msgText}`
-            )
+            throw new Error(`生成失败: ${item.status.messages?.join(', ') || '未知错误'}`)
           }
         }
 
@@ -441,7 +406,7 @@ export class SimpleComfyUIClient {
       }
     }
 
-    throw new Error(`生成超时 (prompt_id=${promptId}, server=${this.serverUrl}, timeout=${timeoutMs}ms)`)
+    throw new Error(`生成超时 (${timeoutMs}ms)`)
   }
 
   /**

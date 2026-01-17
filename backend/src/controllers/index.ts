@@ -22,6 +22,9 @@ export class AuthController {
             // 创建用户
             const user = await this.userModel.createUser(username, email, hashedPassword);
 
+            // Ensure invite code exists
+            const invite_code = await this.userModel.getOrCreateInviteCode(user.id);
+
             // 生成JWT token
             const token = jwt.sign(
                 { id: user.id, email: user.email },
@@ -32,7 +35,7 @@ export class AuthController {
             res.status(201).json({
                 message: 'User created successfully',
                 token,
-                user: { id: user.id, username: user.username, email: user.email }
+                user: { id: user.id, username: user.username, email: user.email, invite_code }
             });
         } catch (error) {
             console.error('Registration error:', error);
@@ -63,10 +66,12 @@ export class AuthController {
                 { expiresIn: '24h' }
             );
 
+            const invite_code = await this.userModel.getOrCreateInviteCode(user.id);
+
             res.json({
                 message: 'Login successful',
                 token,
-                user: { id: user.id, username: user.username, email: user.email }
+                user: { id: user.id, username: user.username, email: user.email, invite_code }
             });
         } catch (error) {
             console.error('Login error:', error);

@@ -2,48 +2,53 @@
 
 import type React from "react"
 
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
+import { Progress } from "@/components/ui/progress"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Sparkles, Loader2, Download, Palette } from "lucide-react"
 import { ComfyUIStatusCard } from "@/components/comfyui-status-card"
 import Link from "next/link"
+import { useLanguage, type LanguageText } from "@/contexts/language-context"
 
 interface AIGeneratorProps {
   onImageGenerated: (imageUrl: string) => void
 }
 
-const promptSuggestions = [
-  "A majestic dragon breathing colorful flames",
-  "Minimalist geometric mountain landscape",
-  "Vintage retro sunset with palm trees",
-  "Abstract watercolor splash in vibrant colors",
-  "Cute cartoon cat wearing sunglasses",
-  "Cyberpunk neon city skyline",
-  "Hand-drawn botanical flowers and leaves",
-  "Space galaxy with stars and planets",
+const promptSuggestions: LanguageText[] = [
+  { zh: "彩色火焰喷吐的巨龙", en: "A majestic dragon breathing colorful flames" },
+  { zh: "极简几何山脉风景", en: "Minimalist geometric mountain landscape" },
+  { zh: "复古日落与椰树", en: "Vintage retro sunset with palm trees" },
+  { zh: "鲜艳水彩抽象飞溅", en: "Abstract watercolor splash in vibrant colors" },
+  { zh: "戴墨镜的可爱猫咪", en: "Cute cartoon cat wearing sunglasses" },
+  { zh: "赛博朋克霓虹城市", en: "Cyberpunk neon city skyline" },
+  { zh: "手绘植物花卉与叶子", en: "Hand-drawn botanical flowers and leaves" },
+  { zh: "星空银河与行星", en: "Space galaxy with stars and planets" },
 ]
 
-const styleOptions = [
-  { value: "realistic", label: "Realistic", description: "Photo-realistic style" },
-  { value: "cartoon", label: "Cartoon", description: "Fun cartoon style" },
-  { value: "anime", label: "Anime", description: "Japanese anime style" },
-  { value: "abstract", label: "Abstract", description: "Abstract art style" },
-  { value: "minimalist", label: "Minimalist", description: "Clean minimal design" },
-  { value: "vintage", label: "Vintage", description: "Retro vintage look" },
+const styleOptions: Array<{ value: string; label: LanguageText; description: LanguageText }> = [
+  { value: "realistic", label: { zh: "写实", en: "Realistic" }, description: { zh: "逼真的写实风格", en: "Photo-realistic style" } },
+  { value: "cartoon", label: { zh: "卡通", en: "Cartoon" }, description: { zh: "轻松有趣的卡通风格", en: "Fun cartoon style" } },
+  { value: "anime", label: { zh: "漫画", en: "Anime" }, description: { zh: "日系漫画风格", en: "Japanese anime style" } },
+  { value: "abstract", label: { zh: "抽象", en: "Abstract" }, description: { zh: "抽象艺术风格", en: "Abstract art style" } },
+  { value: "minimalist", label: { zh: "简约", en: "Minimalist" }, description: { zh: "干净极简设计", en: "Clean minimal design" } },
+  { value: "vintage", label: { zh: "复古", en: "Vintage" }, description: { zh: "复古怀旧风", en: "Retro vintage look" } },
 ]
 
 export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
+  const { translate, language } = useLanguage()
   const [prompt, setPrompt] = useState("")
   const [style, setStyle] = useState("realistic")
   const [isGenerating, setIsGenerating] = useState(false)
   const [generationProgress, setGenerationProgress] = useState("")
+  const [generationPercent, setGenerationPercent] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [errorAction, setErrorAction] = useState<null | "login" | "membership">(null)
+  const progressTimerRef = useRef<number | null>(null)
   const [generatedImages, setGeneratedImages] = useState<Array<{ 
     url: string
     prompt: string
@@ -58,9 +63,25 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
     setIsGenerating(true)
     setError(null)
     setGenerationProgress("正在准备生成...")
+    setGenerationPercent(5)
+
+    if (progressTimerRef.current) {
+      window.clearInterval(progressTimerRef.current)
+      progressTimerRef.current = null
+    }
+
+    // Simulated progress to provide a smooth percentage indicator.
+    progressTimerRef.current = window.setInterval(() => {
+      setGenerationPercent((prev) => {
+        if (prev >= 90) return prev
+        const next = prev + Math.max(1, Math.round(Math.random() * 6))
+        return Math.min(90, next)
+      })
+    }, 400)
     
     try {
       setGenerationProgress("正在发送请求到服务器...")
+      setGenerationPercent((p) => Math.max(p, 15))
 
       const token =
         (typeof window !== "undefined" &&
@@ -77,6 +98,7 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
       })
 
       setGenerationProgress("正在处理响应...")
+      setGenerationPercent((p) => Math.max(p, 60))
 
       if (!response.ok) {
         const body = await response.json().catch(() => null)
@@ -103,6 +125,7 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
       if (data.success) {
         setErrorAction(null)
         setGenerationProgress("生成完成！")
+        setGenerationPercent(100)
         
         const newImage = { 
           url: data.imageUrl, 
@@ -137,14 +160,31 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
       const errorMessage = error instanceof Error ? error.message : "未知错误"
       setError(`生成失败: ${errorMessage}`)
       setGenerationProgress("")
+      setGenerationPercent(0)
     } finally {
       setIsGenerating(false)
+
+      if (progressTimerRef.current) {
+        window.clearInterval(progressTimerRef.current)
+        progressTimerRef.current = null
+      }
+
       // 清除进度状态
       setTimeout(() => {
         setGenerationProgress("")
+        setGenerationPercent(0)
       }, 3000)
     }
   }
+
+  useEffect(() => {
+    return () => {
+      if (progressTimerRef.current) {
+        window.clearInterval(progressTimerRef.current)
+        progressTimerRef.current = null
+      }
+    }
+  }, [])
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && e.ctrlKey && !isGenerating) {
@@ -166,16 +206,20 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
             <Sparkles className="w-4 h-4" />
-            AI Image Generator
+            {translate({ zh: "AI 文生图", en: "AI Image Generator" })}
           </CardTitle>
-          <CardDescription>Describe your vision and let AI create it for you</CardDescription>
+          <CardDescription>
+            {translate({ zh: "用文字描述你想要的图案，交给 AI 生成", en: "Describe your vision and let AI create it for you" })}
+          </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div>
-            <Label htmlFor="ai-prompt">Describe your design</Label>
+            <Label htmlFor="ai-prompt">
+              {translate({ zh: "描述你的设计", en: "Describe your design" })}
+            </Label>
             <Textarea
               id="ai-prompt"
-              placeholder="A cool dragon breathing fire with vibrant colors..."
+              placeholder={translate({ zh: "例如：彩色火焰喷吐的巨龙...", en: "A cool dragon breathing fire with vibrant colors..." })}
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               onKeyDown={handleKeyPress}
@@ -183,7 +227,9 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
               className="mt-1"
               disabled={isGenerating}
             />
-            <p className="text-xs text-muted-foreground mt-1">Press Ctrl+Enter to generate</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              {translate({ zh: "按 Ctrl+Enter 生成", en: "Press Ctrl+Enter to generate" })}
+            </p>
           </div>
 
           {/* 错误显示 */}
@@ -219,18 +265,10 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
             </div>
           )}
 
-          {/* 进度显示 */}
-          {isGenerating && generationProgress && (
-            <div className="bg-blue-50 border border-blue-200 rounded-md p-3 flex items-center gap-2">
-              <Loader2 className="w-4 h-4 animate-spin text-blue-500" />
-              <p className="text-sm text-blue-700">{generationProgress}</p>
-            </div>
-          )}
-
           <div>
             <Label className="flex items-center gap-2">
               <Palette className="w-4 h-4" />
-              Art Style
+              {translate({ zh: "风格", en: "Art Style" })}
             </Label>
             <Select
               value={style}
@@ -252,8 +290,8 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
                 {styleOptions.map((option) => (
                   <SelectItem key={option.value} value={option.value}>
                     <div>
-                      <div className="font-medium">{option.label}</div>
-                      <div className="text-xs text-muted-foreground">{option.description}</div>
+                      <div className="font-medium">{translate(option.label)}</div>
+                      <div className="text-xs text-muted-foreground">{translate(option.description)}</div>
                     </div>
                   </SelectItem>
                 ))}
@@ -263,29 +301,29 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
 
           <Button onClick={generateImage} disabled={!prompt.trim() || isGenerating} className="w-full">
             {isGenerating ? (
-              <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                {generationProgress || "生成中..."}
-              </>
+              <div className="w-full flex items-center gap-3">
+                <Progress value={generationPercent} className="flex-1" />
+                <span className="text-sm tabular-nums w-12 text-right">{generationPercent}%</span>
+              </div>
             ) : (
               <>
                 <Sparkles className="w-4 h-4 mr-2" />
-                Generate Image
+                {translate({ zh: "生成图片", en: "Generate Image" })}
               </>
             )}
           </Button>
 
           <div>
-            <Label className="text-sm">Quick Ideas:</Label>
+            <Label className="text-sm">{translate({ zh: "快速灵感：", en: "Quick Ideas:" })}</Label>
             <div className="flex flex-wrap gap-2 mt-2">
               {promptSuggestions.slice(0, 4).map((suggestion, index) => (
                 <Badge
                   key={index}
                   variant="outline"
                   className="cursor-pointer hover:bg-primary hover:text-primary-foreground text-xs"
-                  onClick={() => setPrompt(suggestion)}
+                  onClick={() => setPrompt(translate(suggestion))}
                 >
-                  {suggestion}
+                  {translate(suggestion)}
                 </Badge>
               ))}
             </div>
@@ -296,8 +334,12 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
       {generatedImages.length > 0 && (
         <Card>
           <CardHeader>
-            <CardTitle className="text-base">Generated Images</CardTitle>
-            <CardDescription>Click to add to your design</CardDescription>
+            <CardTitle className="text-base">
+              {translate({ zh: "生成结果", en: "Generated Images" })}
+            </CardTitle>
+            <CardDescription>
+              {translate({ zh: "点击图片添加到设计", en: "Click to add to your design" })}
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <div className="grid grid-cols-2 gap-3">
@@ -321,10 +363,12 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
                     <Download className="w-6 h-6 text-white" />
                   </div>
                   <div className="absolute bottom-0 left-0 right-0 bg-black/70 text-white p-2 text-xs opacity-0 group-hover:opacity-100 transition-opacity">
-                    <div className="font-medium">{image.style}</div>
+                    <div className="font-medium">
+                      {translate(styleOptions.find((opt) => opt.value === image.style)?.label || { zh: image.style, en: image.style })}
+                    </div>
                     <div>{image.prompt.slice(0, 40)}...</div>
                     {image.isPlaceholder && (
-                      <div className="text-yellow-200">ComfyUI 不可用</div>
+                      <div className="text-yellow-200">{translate({ zh: "ComfyUI 不可用", en: "ComfyUI unavailable" })}</div>
                     )}
                   </div>
                 </div>

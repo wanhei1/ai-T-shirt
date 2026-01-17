@@ -354,7 +354,7 @@ export default function HomePage() {
           <div className="flex items-center justify-between gap-4 mb-6">
             <div>
               <h2 className="text-3xl md:text-4xl font-bold mb-2">
-                {translate({ zh: "我的衣服展示区", en: "My Design Showcase" })}
+                {translate({ zh: "商城展示区", en: "Shop Showcase" })}
               </h2>
               <p className="text-muted-foreground">
                 {translate({ zh: "展示已下单的正面画布，自动横向滑动", en: "Auto-scrolling row of your ordered front canvases" })}

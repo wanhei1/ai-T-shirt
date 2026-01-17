@@ -20,20 +20,27 @@ import { Separator } from "@/components/ui/separator";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
   Calendar,
+  Copy,
   Crown,
   Edit,
+  Gift,
   Loader2,
   Mail,
   Save,
   Sparkles,
   User,
+  Users,
   X,
 } from "lucide-react";
 
 type MembershipRecord = {
   plan_id: string;
   status?: string;
+  started_at?: string | null;
   expires_at?: string | null;
+  transaction_id?: string | null;
+  balance?: number;
+  currency?: string;
 };
 
 type OrderRecord = {
@@ -49,6 +56,14 @@ type OrderRecord = {
     selections?: Record<string, string>;
   };
   selections?: Record<string, string>;
+};
+
+type ReferralMe = {
+  invite_code: string;
+  invited_by_user_id?: number | null;
+  invite_redeemed_at?: string | null;
+  total_invites: number;
+  total_rewards: number;
 };
 
 export default function ProfilePage() {
@@ -67,6 +82,15 @@ export default function ProfilePage() {
   const [orders, setOrders] = useState<OrderRecord[] | null>(null);
   const [membership, setMembership] = useState<MembershipRecord | null>(null);
   const [isLoadingMembership, setIsLoadingMembership] = useState(true);
+
+  const [referralMe, setReferralMe] = useState<ReferralMe | null>(null);
+  const [isLoadingReferral, setIsLoadingReferral] = useState(true);
+  const [inviteCodeInput, setInviteCodeInput] = useState("");
+  const [isRedeemingInvite, setIsRedeemingInvite] = useState(false);
+  const [referralMessage, setReferralMessage] = useState<{
+    type: "success" | "error";
+    text: string;
+  } | null>(null);
 
   const membershipPlans = useMemo(
     () => [
@@ -116,14 +140,69 @@ export default function ProfilePage() {
     [translate]
   );
 
+  const parseBackendTimestamp = (input: string | null | undefined): Date | null => {
+    if (!input) return null;
+    const trimmed = String(input).trim();
+    if (!trimmed) return null;
+
+    // Accept: "...Z", "...+08:00", "...+0800", "...+08", "YYYY-MM-DD HH:mm:ss"
+    const hasExplicitTimezone = /([zZ]|[+-]\d{2}:?\d{2}|[+-]\d{2})$/.test(trimmed);
+    const normalizedBase = trimmed.includes("T") ? trimmed : trimmed.replace(" ", "T");
+    const normalized = hasExplicitTimezone
+      ? normalizedBase.replace(/([+-]\d{2})$/, "$1:00")
+      : `${normalizedBase}Z`;
+
+    const date = new Date(normalized);
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
+
+  const extractEpochMsFromTransactionId = (transactionId: string | null | undefined): number | null => {
+    if (!transactionId) return null;
+    const match = String(transactionId).match(/-(\d{13})$/);
+    if (!match) return null;
+    const ms = Number(match[1]);
+    return Number.isFinite(ms) ? ms : null;
+  };
+
+  const PLAN_DURATION_DAYS: Record<string, number> = {
+    monthly: 30,
+    quarterly: 90,
+    'half-year': 180,
+    yearly: 365
+  };
+
+  const derivedMembershipDates = useMemo(() => {
+    const ms = extractEpochMsFromTransactionId(membership?.transaction_id ?? null);
+    const planDays = membership?.plan_id ? PLAN_DURATION_DAYS[membership.plan_id] : null;
+
+    if (ms && planDays) {
+      return {
+        startedAt: new Date(ms),
+        expiresAt: new Date(ms + planDays * 24 * 60 * 60 * 1000)
+      };
+    }
+
+    return {
+      startedAt: parseBackendTimestamp(membership?.started_at ?? null),
+      expiresAt: parseBackendTimestamp(membership?.expires_at ?? null)
+    };
+  }, [membership]);
+
+  const isMembershipActiveByExpiry = (expiresAt: string | null | undefined) => {
+    if (!expiresAt) return true;
+    const parsed = parseBackendTimestamp(expiresAt);
+    if (!parsed) return true;
+    return parsed.getTime() >= Date.now();
+  };
+
   const activeMembership = useMemo(() => {
     if (!membership) return null;
     if (membership.status && membership.status !== "active") return null;
-    if (!membership.expires_at) return membership;
-    return new Date(membership.expires_at).getTime() >= Date.now()
-      ? membership
-      : null;
-  }, [membership]);
+    if (derivedMembershipDates.expiresAt) {
+      return derivedMembershipDates.expiresAt.getTime() >= Date.now() ? membership : null;
+    }
+    return isMembershipActiveByExpiry(membership.expires_at) ? membership : null;
+  }, [membership, derivedMembershipDates.expiresAt]);
 
   const membershipPlanMeta = useMemo(() => {
     if (!membership) return null;
@@ -206,22 +285,126 @@ export default function ProfilePage() {
     fetchMembership();
   }, []);
 
-  const formatMembershipDate = (value: string | null | undefined) => {
-    if (!value) {
-      return translate({ zh: "长期有效", en: "No expiry" });
-    }
-
-    return new Date(value).toLocaleString(
-      translate({ zh: "zh-CN", en: "en-US" }),
-      {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
+  useEffect(() => {
+    if (!user) return;
+    const fetchReferral = async () => {
+      try {
+        setIsLoadingReferral(true);
+        const { apiClient } = await import("@/lib/api-client");
+        const data = await apiClient.getReferralMe();
+        setReferralMe(data || null);
+      } catch (error) {
+        console.warn("Failed to fetch referral info", error);
+        setReferralMe(null);
+      } finally {
+        setIsLoadingReferral(false);
       }
-    );
+    };
+    fetchReferral();
+  }, [user]);
+
+  const handleCopyInviteCode = async () => {
+    const code = referralMe?.invite_code;
+    if (!code) return;
+    try {
+      await navigator.clipboard.writeText(code);
+      setReferralMessage({
+        type: "success",
+        text: translate({ zh: "邀请码已复制", en: "Invite code copied" }),
+      });
+    } catch {
+      setReferralMessage({
+        type: "error",
+        text: translate({ zh: "复制失败，请手动复制", en: "Copy failed, please copy manually" }),
+      });
+    }
   };
+
+  const handleRedeemInviteCode = async () => {
+    const code = inviteCodeInput.trim();
+    if (!code) {
+      setReferralMessage({
+        type: "error",
+        text: translate({ zh: "请输入邀请码", en: "Please enter an invite code" }),
+      });
+      return;
+    }
+    try {
+      setIsRedeemingInvite(true);
+      setReferralMessage(null);
+      const { apiClient } = await import("@/lib/api-client");
+      const res = await apiClient.redeemInviteCode(code);
+      setReferralMessage({
+        type: "success",
+        text: translate({
+          zh: `兑换成功！邀请人已获得 ${res?.reward?.amount ?? 35}${res?.reward?.currency ?? "CNY"} 激励`,
+          en: `Redeemed! The inviter received ${res?.reward?.amount ?? 35} ${res?.reward?.currency ?? "CNY"}`,
+        }),
+      });
+      setInviteCodeInput("");
+      // Refresh redeemed state
+      const refreshed = await apiClient.getReferralMe();
+      setReferralMe(refreshed || null);
+    } catch (error) {
+      const status = (error as { status?: number })?.status;
+      const msg = (error as Error)?.message || "";
+      if (status === 409) {
+        setReferralMessage({
+          type: "error",
+          text: translate({ zh: "你已兑换过邀请码", en: "You have already redeemed an invite code" }),
+        });
+      } else if (status === 404) {
+        setReferralMessage({
+          type: "error",
+          text: translate({ zh: "邀请码不存在", en: "Invite code not found" }),
+        });
+      } else if (status === 400 && msg.toLowerCase().includes("own")) {
+        setReferralMessage({
+          type: "error",
+          text: translate({ zh: "不能兑换自己的邀请码", en: "You cannot redeem your own code" }),
+        });
+      } else {
+        setReferralMessage({
+          type: "error",
+          text: translate({ zh: "兑换失败，请重试", en: "Redeem failed, please try again" }),
+        });
+      }
+    } finally {
+      setIsRedeemingInvite(false);
+    }
+  };
+
+  const formatBeijingDateTime = (value: string | null | undefined, fallback: string) => {
+    if (!value) return fallback;
+    const parsed = parseBackendTimestamp(value);
+    if (!parsed) return fallback;
+
+    // Convert UTC epoch -> Beijing wall-clock by +08:00, then format via UTC getters.
+    const beijing = new Date(parsed.getTime() + 8 * 60 * 60 * 1000);
+    const yyyy = beijing.getUTCFullYear();
+    const mm = String(beijing.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(beijing.getUTCDate()).padStart(2, "0");
+    const hh = String(beijing.getUTCHours()).padStart(2, "0");
+    const min = String(beijing.getUTCMinutes()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+  };
+
+  const formatBeijingDateFromDate = (date: Date | null, fallback: string) => {
+    if (!date) return fallback;
+    const beijing = new Date(date.getTime() + 8 * 60 * 60 * 1000);
+    const yyyy = beijing.getUTCFullYear();
+    const mm = String(beijing.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(beijing.getUTCDate()).padStart(2, "0");
+    const hh = String(beijing.getUTCHours()).padStart(2, "0");
+    const min = String(beijing.getUTCMinutes()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+  };
+
+  const formatMembershipDate = (value: string | null | undefined) =>
+    formatBeijingDateTime(value, translate({ zh: "长期有效", en: "No expiry" }));
+
+  const formatMembershipStartedDate = (value: string | null | undefined) =>
+    formatBeijingDateTime(value, translate({ zh: "—", en: "—" }));
 
   const getInitials = (name: string) =>
     name
@@ -320,21 +503,44 @@ export default function ProfilePage() {
                       en: "Become a member to unlock unlimited generations, exclusive assets, and more perks for faster creation.",
                     })}
                   </CardDescription>
+                  <div>
+                    <Button asChild variant="outline" className="bg-transparent">
+                      <Link href="/membership#balance-history">
+                        {translate({ zh: "查看余额流水", en: "View balance history" })}
+                      </Link>
+                    </Button>
+                  </div>
                   {activeMembership ? (
-                    <div className="rounded-lg border border-primary/40 bg-primary/10 px-4 py-3 text-sm text-primary-foreground/80">
-                      <div className="flex items-center gap-2 font-semibold text-primary-foreground">
+                    <div className="rounded-lg border border-primary/40 bg-primary/10 px-4 py-3 text-sm text-foreground">
+                      <div className="flex items-center gap-2 font-semibold text-foreground">
                         <Sparkles className="h-4 w-4" />
                         {translate({ zh: "专属特效已开启", en: "Premium mode enabled" })}
                       </div>
-                      <p className="mt-2 text-xs text-primary-foreground/80">
-                        {translate({
-                          zh: `当前会员：${membershipPlanMeta?.label ?? activeMembership.plan_id}，有效期至：${formatMembershipDate(
-                            activeMembership.expires_at ?? null
-                          )}`,
-                          en: `Active plan: ${membershipPlanMeta?.label ?? activeMembership.plan_id}, valid until ${formatMembershipDate(
-                            activeMembership.expires_at ?? null
-                          )}`,
-                        })}
+                      <p className="mt-2 text-xs text-foreground">
+                        {(() => {
+                          const startedAtLabel = derivedMembershipDates.startedAt
+                            ? formatBeijingDateFromDate(
+                                derivedMembershipDates.startedAt,
+                                translate({ zh: "—", en: "—" })
+                              )
+                            : formatMembershipStartedDate(activeMembership.started_at ?? null);
+
+                          const expiresAtLabel = derivedMembershipDates.expiresAt
+                            ? formatBeijingDateFromDate(
+                                derivedMembershipDates.expiresAt,
+                                translate({ zh: "长期有效", en: "No expiry" })
+                              )
+                            : formatMembershipDate(activeMembership.expires_at ?? null);
+
+                          const balanceLabel = `${activeMembership.currency ?? ""} ${Number(
+                            activeMembership.balance ?? 0
+                          ).toFixed(2)}`.trim();
+
+                          return translate({
+                            zh: `当前会员：${membershipPlanMeta?.label ?? activeMembership.plan_id}，余额：${balanceLabel}，开通时间：${startedAtLabel}，有效期至：${expiresAtLabel}`,
+                            en: `Active plan: ${membershipPlanMeta?.label ?? activeMembership.plan_id}, balance: ${balanceLabel}, started at ${startedAtLabel}, valid until ${expiresAtLabel}`,
+                          });
+                        })()}
                       </p>
                     </div>
                   ) : (
@@ -389,6 +595,121 @@ export default function ProfilePage() {
                       </li>
                     ))}
                   </ul>
+                </div>
+              </CardContent>
+            </Card>
+
+            <Card className="md:col-span-2">
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <Users className="h-5 w-5" />
+                  {translate({ zh: "邀请好友", en: "Invite Friends" })}
+                </CardTitle>
+                <CardDescription>
+                  {translate({
+                    zh: "把你的邀请码发给新用户，新用户兑换后你将获得 35 元余额激励。",
+                    en: "Share your invite code. When a new user redeems it, you get a 35 CNY balance reward.",
+                  })}
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {referralMessage && (
+                  <Alert
+                    className={
+                      referralMessage.type === "error"
+                        ? "border-red-500"
+                        : "border-green-500"
+                    }
+                  >
+                    <AlertDescription>{referralMessage.text}</AlertDescription>
+                  </Alert>
+                )}
+
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div className="rounded-lg border bg-background p-4">
+                    <div className="text-sm text-muted-foreground">
+                      {translate({ zh: "我的邀请码", en: "My invite code" })}
+                    </div>
+                    <div className="mt-2 flex items-center justify-between gap-2">
+                      <div className="font-mono text-lg font-semibold">
+                        {isLoadingReferral
+                          ? "—"
+                          : referralMe?.invite_code || "—"}
+                      </div>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={handleCopyInviteCode}
+                        disabled={!referralMe?.invite_code}
+                      >
+                        <Copy className="mr-2 h-4 w-4" />
+                        {translate({ zh: "复制", en: "Copy" })}
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border bg-background p-4">
+                    <div className="text-sm text-muted-foreground">
+                      {translate({ zh: "已邀请人数", en: "Invites" })}
+                    </div>
+                    <div className="mt-2 text-2xl font-semibold">
+                      {isLoadingReferral ? "—" : referralMe?.total_invites ?? 0}
+                    </div>
+                  </div>
+
+                  <div className="rounded-lg border bg-background p-4">
+                    <div className="text-sm text-muted-foreground">
+                      {translate({ zh: "累计奖励", en: "Total rewards" })}
+                    </div>
+                    <div className="mt-2 text-2xl font-semibold">
+                      {isLoadingReferral
+                        ? "—"
+                        : `${Number(referralMe?.total_rewards ?? 0).toFixed(2)} CNY`}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border bg-background p-4">
+                  <div className="mb-3 flex items-center gap-2 font-semibold">
+                    <Gift className="h-4 w-4" />
+                    {translate({ zh: "兑换邀请码", en: "Redeem an invite code" })}
+                  </div>
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center">
+                    <Input
+                      value={inviteCodeInput}
+                      onChange={(e) => setInviteCodeInput(e.target.value)}
+                      placeholder={translate({ zh: "输入好友邀请码", en: "Enter a friend's invite code" })}
+                      disabled={
+                        isRedeemingInvite ||
+                        Boolean(referralMe?.invite_redeemed_at)
+                      }
+                    />
+                    <Button
+                      onClick={handleRedeemInviteCode}
+                      disabled={
+                        isRedeemingInvite ||
+                        Boolean(referralMe?.invite_redeemed_at)
+                      }
+                      className="md:w-48"
+                    >
+                      {isRedeemingInvite ? (
+                        <>
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                          {translate({ zh: "兑换中...", en: "Redeeming..." })}
+                        </>
+                      ) : (
+                        translate({ zh: "确认兑换", en: "Redeem" })
+                      )}
+                    </Button>
+                  </div>
+                  {referralMe?.invite_redeemed_at && (
+                    <p className="mt-2 text-xs text-muted-foreground">
+                      {translate({
+                        zh: "你已兑换过邀请码，无法重复兑换。",
+                        en: "You already redeemed an invite code.",
+                      })}
+                    </p>
+                  )}
                 </div>
               </CardContent>
             </Card>

@@ -97,7 +97,8 @@ class ApiClient {
         err.status = response.status
 
         // If auth failed, proactively clear stored tokens to force re-login.
-        if (typeof window !== "undefined" && (response.status === 401 || response.status === 403)) {
+        // Do NOT clear on generic 403s (e.g. membership required).
+        if (typeof window !== "undefined" && response.status === 401) {
           localStorage.removeItem('authToken')
           localStorage.removeItem('token')
         }
@@ -190,13 +191,14 @@ class ApiClient {
   }
 
   // Public Gallery
-  async getGallery(params?: { limit?: number; offset?: number; category?: string }) {
+  async getGallery(params?: { limit?: number; offset?: number; category?: string; sort?: 'new' | 'sales' }) {
     const searchParams = new URLSearchParams();
     if (typeof params?.limit === 'number') searchParams.set('limit', String(params.limit));
     if (typeof params?.offset === 'number') searchParams.set('offset', String(params.offset));
     if (typeof params?.category === 'string' && params.category.trim().length > 0) {
       searchParams.set('category', params.category.trim());
     }
+    if (params?.sort === 'sales' || params?.sort === 'new') searchParams.set('sort', params.sort);
 
     const query = searchParams.toString();
     const endpoint = query ? `/api/gallery?${query}` : '/api/gallery';
@@ -208,6 +210,13 @@ class ApiClient {
   async getGalleryItem(orderId: number | string) {
     return this.request<{ design: any }>(`/api/gallery/${orderId}`, {
       method: "GET",
+    });
+  }
+
+  async publishGalleryDesign(payload: { selections: any; design: any; canvas?: any; category?: string | null }) {
+    return this.request<{ design: any; allDesignId?: number | null }>("/api/gallery/publish", {
+      method: "POST",
+      body: JSON.stringify(payload),
     });
   }
 
@@ -226,6 +235,36 @@ class ApiClient {
   async getMembership() {
     return this.request<{ membership: any | null }>("/api/memberships/me", {
       method: "GET",
+    });
+  }
+
+  async getMembershipTransactions(limit = 50) {
+    return this.request<{ transactions: any[] }>(`/api/memberships/transactions/me?limit=${limit}`, {
+      method: "GET",
+    });
+  }
+
+  // Referrals / invite
+  async getReferralMe() {
+    return this.request<{
+      invite_code: string;
+      invited_by_user_id?: number | null;
+      invite_redeemed_at?: string | null;
+      total_invites: number;
+      total_rewards: number;
+    }>("/api/referrals/me", {
+      method: "GET",
+    });
+  }
+
+  async redeemInviteCode(code: string) {
+    return this.request<{
+      success: boolean;
+      inviter?: { id: number; username: string; invite_code: string };
+      reward?: { amount: number; currency: string };
+    }>("/api/referrals/redeem", {
+      method: "POST",
+      body: JSON.stringify({ code }),
     });
   }
 }

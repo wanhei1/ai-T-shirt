@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLanguage } from "@/contexts/language-context";
 import apiClient from "@/lib/api-client";
+import { getCached, invalidateCached, setCachedForever } from "@/lib/client-cache";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -52,6 +53,7 @@ export default function ShopDetailPage({ params }: { params: { orderId: string }
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
   const [zoomFront, setZoomFront] = useState(1);
   const [zoomBack, setZoomBack] = useState(1);
+  const [refreshNonce, setRefreshNonce] = useState(0);
 
   const orderId = params.orderId;
   const allDesignId = Number(orderId) || null;
@@ -66,8 +68,16 @@ export default function ShopDetailPage({ params }: { params: { orderId: string }
   useEffect(() => {
     let isMounted = true;
 
-    const load = async () => {
+    const cacheKey = `shop:item:${String(orderId)}`;
+    const cached = getCached<GalleryDesign>(cacheKey);
+    if (cached) {
+      setItem(cached);
+      setLoadState("ready");
+    } else {
       setLoadState("loading");
+    }
+
+    const load = async () => {
       try {
         const response = await apiClient.getGalleryItem(orderId);
         const design = response.design as GalleryDesign | null;
@@ -76,12 +86,14 @@ export default function ShopDetailPage({ params }: { params: { orderId: string }
           return;
         }
         if (isMounted) {
+          setCachedForever(cacheKey, design);
           setItem(design);
           setLoadState("ready");
         }
       } catch (error) {
         console.warn("Failed to load gallery item", error);
-        if (isMounted) setLoadState("error");
+        // If we already showed cached data, keep it.
+        if (isMounted && !cached) setLoadState("error");
       }
     };
 
@@ -89,7 +101,7 @@ export default function ShopDetailPage({ params }: { params: { orderId: string }
     return () => {
       isMounted = false;
     };
-  }, [orderId]);
+  }, [orderId, refreshNonce]);
 
   const snapshots = useMemo(() => {
     return {
@@ -175,6 +187,20 @@ export default function ShopDetailPage({ params }: { params: { orderId: string }
       router.push("/profile");
     } catch (error) {
       console.error("Purchase failed", error);
+      const status = (error as { status?: number })?.status
+      const message = (error as Error)?.message || ""
+
+      if (status === 403 && message.toLowerCase().includes("membership")) {
+        alert(translate({ zh: "需要有效会员才能购买", en: "An active membership is required to purchase." }))
+        router.push("/membership")
+        return
+      }
+      if (status === 402 || message.toLowerCase().includes("insufficient")) {
+        alert(translate({ zh: "会员余额不足，请充值/续费后再购买", en: "Insufficient membership balance. Please top up/renew to continue." }))
+        router.push("/membership")
+        return
+      }
+
       alert(translate({ zh: "购买失败，请重试", en: "Purchase failed, please try again" }));
     } finally {
       setIsPlacingOrder(false);
@@ -196,6 +222,18 @@ export default function ShopDetailPage({ params }: { params: { orderId: string }
           <div className="flex gap-3">
             <Button variant="outline" asChild className="bg-transparent">
               <Link href="/shop">{translate({ zh: "返回店铺", en: "Back" })}</Link>
+            </Button>
+            <Button
+              variant="outline"
+              className="bg-transparent"
+              onClick={() => {
+                const cacheKey = `shop:item:${String(orderId)}`;
+                invalidateCached(cacheKey);
+                setLoadState("loading");
+                setRefreshNonce((n) => n + 1);
+              }}
+            >
+              {translate({ zh: "刷新", en: "Refresh" })}
             </Button>
           </div>
         </div>

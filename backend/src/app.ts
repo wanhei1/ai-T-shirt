@@ -44,11 +44,12 @@ app.use(cors({
     },
     credentials: true
 }));
-// Increase JSON and URL-encoded body size limits to allow larger payloads
-// (orders may contain design data or embedded images in demo setups).
+// Increase JSON and URL-encoded body size limits to allow larger payloads.
+// Orders can include embedded design images (data URLs), which easily exceed small defaults.
 // For production, prefer uploading large files to object storage and sending references.
-app.use(express.json({ limit: process.env.EXPRESS_JSON_LIMIT || '5mb' }));
-app.use(express.urlencoded({ extended: true, limit: process.env.EXPRESS_JSON_LIMIT || '5mb' }));
+const bodyLimit = process.env.EXPRESS_JSON_LIMIT || '25mb';
+app.use(express.json({ limit: bodyLimit }));
+app.use(express.urlencoded({ extended: true, limit: bodyLimit }));
 
 // 健康检查路由
 app.get('/', (req, res) => {
@@ -98,9 +99,44 @@ const initializeApp = async () => {
                     username VARCHAR(255) NOT NULL,
                     email VARCHAR(255) UNIQUE NOT NULL,
                     password VARCHAR(255) NOT NULL,
+                    invite_code VARCHAR(32) UNIQUE,
+                    invited_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+                    invite_redeemed_at TIMESTAMP,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             `);
+
+            // Referral/invite upgrades for older installations.
+            try {
+                await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_code VARCHAR(32) UNIQUE`);
+                await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS invited_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL`);
+                await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_redeemed_at TIMESTAMP`);
+                await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_invite_code_unique ON users(invite_code)`);
+                await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_invited_by_user_id ON users(invited_by_user_id)`);
+            } catch (err) {
+                console.warn('⚠️ Failed to ensure users referral columns:', (err as any)?.message || err);
+            }
+
+            // Track invite redemptions for auditing and stats.
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS referral_redemptions (
+                    id SERIAL PRIMARY KEY,
+                    inviter_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    invitee_user_id INTEGER UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    invite_code VARCHAR(32) NOT NULL,
+                    reward_amount NUMERIC(10,2) NOT NULL DEFAULT 35,
+                    rewarded_at TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            `);
+            try {
+                await pool.query(`ALTER TABLE referral_redemptions ADD COLUMN IF NOT EXISTS rewarded_at TIMESTAMP`);
+                await pool.query(`UPDATE referral_redemptions SET rewarded_at = COALESCE(rewarded_at, created_at)`);
+                await pool.query(`CREATE INDEX IF NOT EXISTS idx_referral_redemptions_inviter ON referral_redemptions(inviter_user_id)`);
+                await pool.query(`CREATE INDEX IF NOT EXISTS idx_referral_redemptions_rewarded_at ON referral_redemptions(rewarded_at)`);
+            } catch (err) {
+                console.warn('⚠️ Failed to ensure referral_redemptions indexes:', (err as any)?.message || err);
+            }
 
             // 创建订单表，用于保存用户下单记录
             await pool.query(`
@@ -148,6 +184,35 @@ const initializeApp = async () => {
                 )
             `);
 
+            // Gallery listing can be large; keep common sort/filter fast.
+            try {
+                await pool.query(`CREATE INDEX IF NOT EXISTS idx_all_designs_created_at_desc ON all_designs(created_at DESC)`);
+                await pool.query(`CREATE INDEX IF NOT EXISTS idx_all_designs_category_created_at_desc ON all_designs(category, created_at DESC)`);
+            } catch (err) {
+                console.warn('⚠️ Failed to ensure all_designs indexes:', (err as any)?.message || err);
+            }
+
+            // Reward designers when others place orders using their published designs.
+            // One reward per order (idempotent via unique order_id).
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS design_usage_rewards (
+                    id SERIAL PRIMARY KEY,
+                    order_id INTEGER UNIQUE NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+                    source_all_id INTEGER NOT NULL REFERENCES all_designs(id) ON DELETE CASCADE,
+                    buyer_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    designer_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    reward_amount NUMERIC(10,2) NOT NULL DEFAULT 15,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            `);
+            try {
+                await pool.query(`CREATE INDEX IF NOT EXISTS idx_design_usage_rewards_designer ON design_usage_rewards(designer_user_id)`);
+                await pool.query(`CREATE INDEX IF NOT EXISTS idx_design_usage_rewards_buyer ON design_usage_rewards(buyer_user_id)`);
+                await pool.query(`CREATE INDEX IF NOT EXISTS idx_design_usage_rewards_source_all_id ON design_usage_rewards(source_all_id)`);
+            } catch (err) {
+                console.warn('⚠️ Failed to ensure design_usage_rewards indexes:', (err as any)?.message || err);
+            }
+
             // Ensure category exists for older installations
             try {
                 await pool.query(`ALTER TABLE all_designs ADD COLUMN IF NOT EXISTS category TEXT`);
@@ -173,6 +238,7 @@ const initializeApp = async () => {
                     user_id INTEGER UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                     plan_id VARCHAR(50) NOT NULL,
                     amount NUMERIC(10,2) NOT NULL,
+                    balance NUMERIC(10,2) NOT NULL DEFAULT 0,
                     currency VARCHAR(10) DEFAULT 'CNY',
                     status VARCHAR(20) DEFAULT 'active',
                     transaction_id VARCHAR(255) UNIQUE NOT NULL,
@@ -184,8 +250,52 @@ const initializeApp = async () => {
                     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             `);
+
+            // Ensure balance exists for older installations.
+            try {
+                await pool.query(`ALTER TABLE memberships ADD COLUMN IF NOT EXISTS balance NUMERIC(10,2) NOT NULL DEFAULT 0`);
+            } catch (err) {
+                console.warn('⚠️ Failed to ensure memberships.balance column:', (err as any)?.message || err);
+            }
             await pool.query(`
                 CREATE INDEX IF NOT EXISTS idx_memberships_user_id ON memberships(user_id)
+            `);
+
+            // Track membership balance history per user.
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS membership_transactions (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    delta NUMERIC(10,2) NOT NULL,
+                    balance_after NUMERIC(10,2) NOT NULL,
+                    currency VARCHAR(10) NOT NULL DEFAULT 'CNY',
+                    type VARCHAR(64) NOT NULL,
+                    reference_id VARCHAR(128),
+                    raw_payload JSONB,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            `);
+            await pool.query(`CREATE INDEX IF NOT EXISTS idx_membership_transactions_user_time ON membership_transactions(user_id, created_at DESC)`);
+
+            // Backfill membership purchase history for existing members if missing.
+            await pool.query(`
+                INSERT INTO membership_transactions (user_id, delta, balance_after, currency, type, reference_id, raw_payload, created_at)
+                SELECT m.user_id,
+                       m.amount,
+                       m.balance,
+                       m.currency,
+                       'membership_purchase',
+                       m.transaction_id,
+                       m.raw_payload,
+                       COALESCE(m.started_at, m.created_at, NOW())
+                FROM memberships m
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM membership_transactions t
+                    WHERE t.user_id = m.user_id
+                      AND t.type = 'membership_purchase'
+                      AND t.reference_id = m.transaction_id
+                )
             `);
 
             dbConnected = true;

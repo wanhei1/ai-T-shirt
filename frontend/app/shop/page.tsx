@@ -3,8 +3,10 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useLanguage } from "@/contexts/language-context";
+import apiClient from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { getCached, invalidateCached, setCachedForever } from "@/lib/client-cache";
 
 type ShopCategory = "all" | "realistic" | "cartoon" | "abstract" | "anime" | "minimalist" | "vintage";
 
@@ -22,6 +24,7 @@ type GalleryDesign = {
   created_at: string;
   username: string;
   category?: string | null;
+  sales_count?: number;
   selections?: Record<string, any>;
   design?: {
     elements?: Array<{ type?: string; content?: string }>;
@@ -32,26 +35,41 @@ type GalleryDesign = {
   canvas_meta?: any;
 };
 
+type ShopSort = "new" | "sales";
+
 export default function ShopPage() {
   const { translate } = useLanguage();
   const [designs, setDesigns] = useState<GalleryDesign[] | null>(null);
   const [category, setCategory] = useState<ShopCategory>("all");
+  const [sort, setSort] = useState<ShopSort>("sales");
+  const [refreshNonce, setRefreshNonce] = useState(0);
 
   useEffect(() => {
     let isMounted = true;
 
+    const cacheKey = `shop:gallery:v2:${category}:${sort}`;
+    const cached = getCached<GalleryDesign[]>(cacheKey);
+    if (cached) {
+      setDesigns(cached);
+    } else {
+      setDesigns(null);
+    }
+
     const load = async () => {
       try {
-        const { apiClient } = await import("@/lib/api-client");
         const response = await apiClient.getGallery({
           limit: 60,
           offset: 0,
           category: category === "all" ? undefined : category,
+          sort,
         });
-        if (isMounted) setDesigns((response.designs || []) as GalleryDesign[]);
+        const next = (response.designs || []) as GalleryDesign[];
+        setCachedForever(cacheKey, next);
+        if (isMounted) setDesigns(next);
       } catch (error) {
         console.warn("Failed to load shop designs", error);
-        if (isMounted) setDesigns([]);
+        // If we already showed cached data, keep it.
+        if (isMounted && !cached) setDesigns([]);
       }
     };
 
@@ -59,7 +77,7 @@ export default function ShopPage() {
     return () => {
       isMounted = false;
     };
-  }, [category]);
+  }, [category, sort, refreshNonce]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -83,7 +101,24 @@ export default function ShopPage() {
           </div>
         </div>
 
-        <div className="mb-6 flex flex-wrap gap-2">
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <Button
+            variant={sort === "sales" ? "default" : "outline"}
+            className={sort === "sales" ? "" : "bg-transparent"}
+            onClick={() => setSort("sales")}
+          >
+            {translate({ zh: "销量排行", en: "Best sellers" })}
+          </Button>
+          <Button
+            variant={sort === "new" ? "default" : "outline"}
+            className={sort === "new" ? "" : "bg-transparent"}
+            onClick={() => setSort("new")}
+          >
+            {translate({ zh: "最新", en: "Newest" })}
+          </Button>
+        </div>
+
+        <div className="mb-6 flex flex-wrap items-center gap-2">
           <Button
             variant={category === "all" ? "default" : "outline"}
             className={category === "all" ? "" : "bg-transparent"}
@@ -101,6 +136,20 @@ export default function ShopPage() {
               {translate(categoryLabels[key])}
             </Button>
           ))}
+
+          <div className="ml-auto" />
+          <Button
+            variant="outline"
+            className="bg-transparent"
+            onClick={() => {
+              const cacheKey = `shop:gallery:v2:${category}:${sort}`;
+              invalidateCached(cacheKey);
+              setDesigns(null);
+              setRefreshNonce((n) => n + 1);
+            }}
+          >
+            {translate({ zh: "刷新", en: "Refresh" })}
+          </Button>
         </div>
 
         {designs === null ? (
@@ -141,6 +190,11 @@ export default function ShopPage() {
                     </CardDescription>
                   </CardHeader>
                   <CardContent className="space-y-3">
+                    {typeof item.sales_count === "number" && (
+                      <div className="text-xs text-muted-foreground">
+                        {translate({ zh: "销量：", en: "Sales: " })}{item.sales_count}
+                      </div>
+                    )}
                     {thumbnailSrc ? (
                       <img
                         src={thumbnailSrc}

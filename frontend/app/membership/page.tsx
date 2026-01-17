@@ -23,6 +23,7 @@ interface MembershipRecord {
   user_id: number;
   plan_id: string;
   amount: number;
+  balance?: number;
   currency: string;
   status: string;
   started_at: string;
@@ -35,8 +36,27 @@ interface MembershipResponse {
   membership: MembershipRecord | null;
 }
 
+interface MembershipTransaction {
+  id: number;
+  user_id: number;
+  delta: number;
+  balance_after: number;
+  currency: string;
+  type: string;
+  reference_id?: string | null;
+  raw_payload?: any;
+  created_at: string;
+}
+
 const PLAN_IDS = ["monthly", "quarterly", "half-year", "yearly"] as const;
 type PlanId = (typeof PLAN_IDS)[number];
+
+const PLAN_DURATION_DAYS: Record<PlanId, number> = {
+  monthly: 30,
+  quarterly: 90,
+  "half-year": 180,
+  yearly: 365,
+};
 
 interface MembershipPlan {
   id: PlanId;
@@ -99,8 +119,43 @@ export default function MembershipPage() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [isLoadingStatus, setIsLoadingStatus] = useState(true);
   const [membership, setMembership] = useState<MembershipRecord | null>(null);
+  const [transactions, setTransactions] = useState<MembershipTransaction[]>([]);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const parseBackendTimestamp = (input: string | null | undefined): Date | null => {
+    if (!input) return null;
+    const trimmed = String(input).trim();
+    if (!trimmed) return null;
+
+    const hasExplicitTimezone = /([zZ]|[+-]\d{2}:?\d{2}|[+-]\d{2})$/.test(trimmed);
+    const normalizedBase = trimmed.includes("T") ? trimmed : trimmed.replace(" ", "T");
+    const normalized = hasExplicitTimezone
+      ? normalizedBase.replace(/([+-]\d{2})$/, "$1:00")
+      : `${normalizedBase}Z`;
+
+    const date = new Date(normalized);
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
+
+  const extractEpochMsFromTransactionId = (transactionId: string | null | undefined): number | null => {
+    if (!transactionId) return null;
+    const match = String(transactionId).match(/-(\d{13})$/);
+    if (!match) return null;
+    const ms = Number(match[1]);
+    return Number.isFinite(ms) ? ms : null;
+  };
+
+  const formatBeijingDateFromDate = (date: Date | null, fallback: string) => {
+    if (!date) return fallback;
+    const beijing = new Date(date.getTime() + 8 * 60 * 60 * 1000);
+    const yyyy = beijing.getUTCFullYear();
+    const mm = String(beijing.getUTCMonth() + 1).padStart(2, "0");
+    const dd = String(beijing.getUTCDate()).padStart(2, "0");
+    const hh = String(beijing.getUTCHours()).padStart(2, "0");
+    const min = String(beijing.getUTCMinutes()).padStart(2, "0");
+    return `${yyyy}-${mm}-${dd} ${hh}:${min}`;
+  };
 
   const selectedPlan = useMemo(
     () => MEMBERSHIP_PLANS.find((plan) => plan.id === selectedPlanId)!,
@@ -110,8 +165,20 @@ export default function MembershipPage() {
   const isMembershipActive = useMemo(() => {
     if (!membership) return false;
     if (membership.status && membership.status !== "active") return false;
+    const ms = extractEpochMsFromTransactionId(membership.transaction_id);
+    const planId = (PLAN_IDS as readonly string[]).includes(membership.plan_id)
+      ? (membership.plan_id as PlanId)
+      : null;
+
+    if (ms && planId) {
+      const expiresAt = new Date(ms + PLAN_DURATION_DAYS[planId] * 24 * 60 * 60 * 1000);
+      return expiresAt.getTime() >= Date.now();
+    }
+
     if (!membership.expires_at) return true;
-    return new Date(membership.expires_at).getTime() >= Date.now();
+    const expiresAt = parseBackendTimestamp(membership.expires_at);
+    if (!expiresAt) return true;
+    return expiresAt.getTime() >= Date.now();
   }, [membership]);
 
   useEffect(() => {
@@ -120,6 +187,8 @@ export default function MembershipPage() {
         setIsLoadingStatus(true);
         const data = (await apiClient.getMembership()) as MembershipResponse;
         setMembership(data?.membership ?? null);
+        const tx = await apiClient.getMembershipTransactions(50);
+        setTransactions((tx as { transactions?: MembershipTransaction[] })?.transactions ?? []);
       } catch (error) {
         console.error("Failed to fetch membership", error);
         setErrorMessage(
@@ -151,6 +220,12 @@ export default function MembershipPage() {
       const refreshed = (await apiClient.getMembership()) as MembershipResponse;
       const nextMembership = refreshed?.membership ?? response?.membership ?? null;
       setMembership(nextMembership);
+      try {
+        const tx = await apiClient.getMembershipTransactions(50);
+        setTransactions((tx as { transactions?: MembershipTransaction[] })?.transactions ?? []);
+      } catch {
+        // ignore
+      }
 
       if (nextMembership) {
         setSuccessMessage(
@@ -174,17 +249,59 @@ export default function MembershipPage() {
 
   const formatDateTime = (value: string | null) => {
     if (!value) return translate({ zh: "不过期", en: "No expiry" });
-    return new Date(value).toLocaleString(
-      translate({ zh: "zh-CN", en: "en-US" }),
-      {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-        hour: "2-digit",
-        minute: "2-digit",
-      }
-    );
+    const parsed = parseBackendTimestamp(value);
+    return formatBeijingDateFromDate(parsed, translate({ zh: "—", en: "—" }));
   };
+
+  const formatTransactionTime = (value: string) => {
+    const parsed = parseBackendTimestamp(value);
+    return formatBeijingDateFromDate(parsed, translate({ zh: "—", en: "—" }));
+  };
+
+  const formatDelta = (value: number) => {
+    const fixed = Number(value).toFixed(2);
+    return value >= 0 ? `+${fixed}` : fixed;
+  };
+
+  const formatTransactionType = (value: string) => {
+    switch (value) {
+      case "membership_purchase":
+        return translate({ zh: "会员充值", en: "Membership top-up" });
+      case "order_payment":
+        return translate({ zh: "消费下单", en: "Order payment" });
+      case "balance_credit":
+        return translate({ zh: "奖励入账", en: "Reward credit" });
+      case "balance_adjust":
+        return translate({ zh: "余额调整", en: "Balance adjustment" });
+      default:
+        return value;
+    }
+  };
+
+  const derivedDates = useMemo(() => {
+    if (!membership) {
+      return {
+        startedAt: null as Date | null,
+        expiresAt: null as Date | null,
+      };
+    }
+
+    const ms = extractEpochMsFromTransactionId(membership.transaction_id);
+    const planId = (PLAN_IDS as readonly string[]).includes(membership.plan_id)
+      ? (membership.plan_id as PlanId)
+      : null;
+
+    if (ms && planId) {
+      const startedAt = new Date(ms);
+      const expiresAt = new Date(ms + PLAN_DURATION_DAYS[planId] * 24 * 60 * 60 * 1000);
+      return { startedAt, expiresAt };
+    }
+
+    return {
+      startedAt: parseBackendTimestamp(membership.started_at),
+      expiresAt: parseBackendTimestamp(membership.expires_at),
+    };
+  }, [membership]);
 
   return (
     <AuthGuard requireAuth>
@@ -415,10 +532,26 @@ export default function MembershipPage() {
                   </div>
                   <div>
                     <p className="text-sm text-muted-foreground">
+                      {translate({ zh: "开通时间", en: "Started at" })}
+                    </p>
+                    <p className="text-lg font-semibold text-foreground">
+                      {formatBeijingDateFromDate(
+                        derivedDates.startedAt,
+                        translate({ zh: "—", en: "—" })
+                      )}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">
                       {translate({ zh: "有效期至", en: "Valid until" })}
                     </p>
                     <p className="text-lg font-semibold text-foreground">
-                      {formatDateTime(membership.expires_at)}
+                      {derivedDates.expiresAt
+                        ? formatBeijingDateFromDate(
+                            derivedDates.expiresAt,
+                            translate({ zh: "—", en: "—" })
+                          )
+                        : formatDateTime(membership.expires_at)}
                     </p>
                   </div>
                   <div>
@@ -427,6 +560,14 @@ export default function MembershipPage() {
                     </p>
                     <p className="text-lg font-semibold text-foreground">
                       {membership.currency} {Number(membership.amount ?? 0).toFixed(2)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">
+                      {translate({ zh: "会员余额", en: "Balance" })}
+                    </p>
+                    <p className="text-lg font-semibold text-foreground">
+                      {membership.currency} {Number(membership.balance ?? 0).toFixed(2)}
                     </p>
                   </div>
                   <div>
@@ -457,6 +598,46 @@ export default function MembershipPage() {
               ) : (
                 <div className="text-sm text-muted-foreground">
                   {translate({ zh: "尚未开通会员，选择方案即可立即启用。", en: "No active membership yet. Pick a plan to get started." })}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card id="balance-history">
+            <CardHeader>
+              <CardTitle>{translate({ zh: "余额流水", en: "Balance History" })}</CardTitle>
+              <CardDescription>
+                {translate({ zh: "展示你的余额变动记录", en: "Your recent balance changes" })}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="mb-4 rounded-lg border border-border/60 bg-muted/30 px-4 py-3 text-sm">
+                {translate({ zh: "当前余额", en: "Current balance" })}: {membership?.currency ?? "CNY"} {Number(membership?.balance ?? 0).toFixed(2)}
+              </div>
+              {transactions.length === 0 ? (
+                <div className="text-sm text-muted-foreground">
+                  {translate({ zh: "暂无记录", en: "No records yet" })}
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {transactions.map((tx) => (
+                    <div key={tx.id} className="flex items-center justify-between border-b border-border/60 pb-2">
+                      <div>
+                        <div className="text-sm font-medium">
+                          {translate({ zh: "变动", en: "Change" })}: {formatDelta(Number(tx.delta))} {tx.currency}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {translate({ zh: "余额", en: "Balance" })}: {Number(tx.balance_after).toFixed(2)} {tx.currency}
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          {translate({ zh: "类型", en: "Type" })}: {formatTransactionType(tx.type)}
+                        </div>
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        {formatTransactionTime(tx.created_at)}
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </CardContent>

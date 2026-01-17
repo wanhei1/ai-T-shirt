@@ -21,24 +21,17 @@ import { useLanguage } from "@/contexts/language-context";
 const tshirtStyles = [
   {
     id: "classic",
-    name: { zh: "经典版型", en: "Classic Fit" },
-    description: { zh: "舒适百搭的日常穿着", en: "Comfortable everyday wear" },
-    price: 24.99,
-    image: "/classic-fit-t-shirt-mockup.jpg",
+    name: { zh: "男款", en: "Men" },
+    description: { zh: "男款版型", en: "Men's fit" },
+    price: 188,
+    image: "/malemodel.png",
   },
   {
     id: "slim",
-    name: { zh: "修身版型", en: "Slim Fit" },
-    description: { zh: "现代感剪裁造型", en: "Modern tailored silhouette" },
-    price: 26.99,
-    image: "/slim-fit-t-shirt-mockup.jpg",
-  },
-  {
-    id: "oversized",
-    name: { zh: "宽松版型", en: "Oversized" },
-    description: { zh: "随性街头风格", en: "Relaxed streetwear style" },
-    price: 28.99,
-    image: "/oversized-t-shirt-mockup.jpg",
+    name: { zh: "女款", en: "Women" },
+    description: { zh: "女款版型", en: "Women's fit" },
+    price: 188,
+    image: "/femalemodel.png",
   },
 ];
 
@@ -156,7 +149,7 @@ export default function DesignPage() {
               <div className="space-y-6">
                 <Card>
                   <CardContent className="p-6">
-                    <div className="aspect-square bg-muted rounded-lg mb-4 flex items-center justify-center overflow-hidden">
+                    <div className="h-[520px] md:h-[600px] bg-muted rounded-lg mb-4 flex items-center justify-center overflow-hidden">
                       <img
                         src={selectedStyleData?.image || "/placeholder.svg"}
                         alt={
@@ -164,7 +157,7 @@ export default function DesignPage() {
                             ? translate(selectedStyleData.name)
                             : undefined
                         }
-                        className="w-full h-full object-cover"
+                        className="w-full h-full object-contain"
                       />
                     </div>
                     <div className="text-center">
@@ -179,7 +172,7 @@ export default function DesignPage() {
                           : ""}
                       </p>
                       <div className="text-2xl font-bold text-primary">
-                        ${selectedStyleData?.price}
+                        ${selectedStyleData?.price?.toFixed(2) ?? "188.00"}
                       </div>
                     </div>
                   </CardContent>

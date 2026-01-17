@@ -6,6 +6,7 @@ import { useEffect, useMemo, useRef, useState, useRef as useReactRef } from "rea
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
+import { Progress } from "@/components/ui/progress"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
@@ -26,7 +27,7 @@ import {
 } from "lucide-react"
 import Link from "next/link"
 import { useRouter } from "next/navigation"
-import Image from "next/image"
+import NextImage from "next/image"
 import { AIGenerator } from "@/components/design-tools/ai-generator"
 import { ImageUploader } from "@/components/design-tools/image-uploader"
 import { useLanguage, type LanguageText } from "@/contexts/language-context"
@@ -65,6 +66,25 @@ const colorLabels: Record<string, LanguageText> = {
   purple: { zh: "紫色", en: "Purple" },
 }
 
+type TryOnModelGender = "male" | "female"
+const TRYON_MODEL_STORAGE_KEY = "tryOnModelGender"
+const TRYON_CACHE_STORAGE_KEY = "tryOnCacheV1"
+
+type TryOnCache = {
+  signature: string
+  gender: TryOnModelGender
+  front: string | null
+  back: string | null
+  createdAt: number
+}
+
+const getTryOnModelSrc = (gender: TryOnModelGender, side: "front" | "back") => {
+  if (gender === "female") {
+    return side === "back" ? "/femalemodelback.png" : "/femalemodel.png"
+  }
+  return side === "back" ? "/malemodelback.jpg" : "/malemodel.png"
+}
+
 export default function DesignEditorPage() {
   const router = useRouter()
   const canvasRef = useRef<HTMLDivElement>(null)
@@ -73,6 +93,7 @@ export default function DesignEditorPage() {
   const hadStoredDesignRef = useRef(false)
   const hasUserEditedRef = useRef(false)
   const persistTimerRef = useRef<number | null>(null)
+  const continueProgressTimerRef = useRef<number | null>(null)
   const designElementsRef = useRef<DesignElement[]>([])
   const selectedElementRef = useRef<string | null>(null)
   const isDraggingRef = useRef(false)
@@ -109,7 +130,251 @@ export default function DesignEditorPage() {
   const [selectedFont, setSelectedFont] = useState("Arial")
   const [selectedColor, setSelectedColor] = useState("#000000")
 
-  const [canvasZoom, setCanvasZoom] = useState(1)
+  const [tryOnModelGender, setTryOnModelGender] = useState<TryOnModelGender>(() => {
+    if (typeof window === "undefined") return "male"
+    const v = window.localStorage.getItem(TRYON_MODEL_STORAGE_KEY)
+    return v === "female" ? "female" : "male"
+  })
+
+  const [isContinuingToPreview, setIsContinuingToPreview] = useState(false)
+  const [continuePercent, setContinuePercent] = useState(0)
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      window.localStorage.setItem(TRYON_MODEL_STORAGE_KEY, tryOnModelGender)
+    } catch {
+      // ignore storage failures
+    }
+  }, [tryOnModelGender])
+
+  const loadImage = (src: string) =>
+    new Promise<HTMLImageElement>((resolve, reject) => {
+      if (typeof window === "undefined") {
+        reject(new Error("Image loading is only available in the browser"))
+        return
+      }
+      const img = new window.Image()
+      img.crossOrigin = "anonymous"
+      img.onload = () => resolve(img)
+      img.onerror = () => reject(new Error("Failed to load image"))
+      img.src = src
+    })
+
+  const dataUrlToBlob = (dataUrl: string): Blob => {
+    const [header, base64] = dataUrl.split(",")
+    const mime = header.match(/data:(.*?);base64/)?.[1] || "image/png"
+    const bytes = atob(base64)
+    const arr = new Uint8Array(bytes.length)
+    for (let i = 0; i < bytes.length; i += 1) arr[i] = bytes.charCodeAt(i)
+    return new Blob([arr], { type: mime })
+  }
+
+  const renderClothSnapshot = async (side: "front" | "back") => {
+    const meta = canvasMeta
+    const canvas = document.createElement("canvas")
+    const scale = 2
+    canvas.width = meta.width * scale
+    canvas.height = meta.height * scale
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return null
+
+    ctx.fillStyle = meta.backgroundColor || "#f8fafc"
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+    // Draw shirt base (real photo if available; fallback to SVG)
+    if (shirtPhotoSrc) {
+      try {
+        const base = await loadImage(shirtPhotoSrc)
+        ctx.drawImage(base, 0, 0, canvas.width, canvas.height)
+      } catch {
+        // fall back to SVG silhouette
+        ctx.save()
+        ctx.scale((meta.width * scale) / 200, (meta.height * scale) / 200)
+        const shirtPath = new Path2D(
+          "M70 30 L90 30 Q100 50 110 30 L130 30 Q145 30 150 45 L175 75 L155 95 L155 165 L45 165 L45 95 L25 75 L50 45 Q55 30 70 30 Z"
+        )
+        ctx.fillStyle = shirtFill || "#e5e7eb"
+        ctx.strokeStyle = "#444"
+        ctx.lineWidth = 4 / scale
+        ctx.lineJoin = "round"
+        ctx.lineCap = "round"
+        ctx.fill(shirtPath)
+        ctx.stroke(shirtPath)
+        ctx.restore()
+      }
+    } else {
+      ctx.save()
+      ctx.scale((meta.width * scale) / 200, (meta.height * scale) / 200)
+      const shirtPath = new Path2D(
+        "M70 30 L90 30 Q100 50 110 30 L130 30 Q145 30 150 45 L175 75 L155 95 L155 165 L45 165 L45 95 L25 75 L50 45 Q55 30 70 30 Z"
+      )
+      ctx.fillStyle = shirtFill || "#e5e7eb"
+      ctx.strokeStyle = "#444"
+      ctx.lineWidth = 4 / scale
+      ctx.lineJoin = "round"
+      ctx.lineCap = "round"
+      ctx.fill(shirtPath)
+      ctx.stroke(shirtPath)
+      ctx.restore()
+    }
+
+    ctx.save()
+    ctx.translate(meta.printArea.x * scale, meta.printArea.y * scale)
+    ctx.beginPath()
+    ctx.rect(0, 0, meta.printArea.width * scale, meta.printArea.height * scale)
+    ctx.clip()
+
+    const elements = (designElements || []).filter((el) => el.visible && el.side === side)
+    for (const element of elements) {
+      ctx.save()
+      ctx.translate((element.x + element.width / 2) * scale, (element.y + element.height / 2) * scale)
+      ctx.rotate((element.rotation * Math.PI) / 180)
+      ctx.translate((-element.width / 2) * scale, (-element.height / 2) * scale)
+
+      if (element.type === "text") {
+        ctx.fillStyle = element.color || "#111827"
+        ctx.font = `${element.fontSize || 24}px ${element.fontFamily || "Arial"}`
+        ctx.textAlign = "center"
+        ctx.textBaseline = "middle"
+        ctx.fillText(element.content, (element.width * scale) / 2, (element.height * scale) / 2, element.width * scale)
+      } else if (element.content) {
+        try {
+          const img = await loadImage(element.content)
+          ctx.drawImage(img, 0, 0, element.width * scale, element.height * scale)
+        } catch {
+          // skip
+        }
+      }
+
+      ctx.restore()
+    }
+
+    ctx.restore()
+    return canvas.toDataURL("image/png")
+  }
+
+  const renderTryOnClothSnapshot = async (side: "front" | "back") => {
+    const meta = canvasMeta
+
+    // Prefer rendering try-on cloth on the base shirt image at its native size.
+    // Keep background transparent to better match typical backend cloth inputs.
+    if (!shirtPhotoSrc) {
+      return renderClothSnapshot(side)
+    }
+
+    const base = await loadImage(shirtPhotoSrc)
+    const baseWidth = base.naturalWidth || base.width
+    const baseHeight = base.naturalHeight || base.height
+
+    const canvas = document.createElement("canvas")
+    canvas.width = baseWidth
+    canvas.height = baseHeight
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return null
+
+    ctx.drawImage(base, 0, 0, canvas.width, canvas.height)
+
+    const sx = canvas.width / meta.width
+    const sy = canvas.height / meta.height
+    const fontScale = (sx + sy) / 2
+
+    ctx.save()
+    ctx.translate(meta.printArea.x * sx, meta.printArea.y * sy)
+    ctx.beginPath()
+    ctx.rect(0, 0, meta.printArea.width * sx, meta.printArea.height * sy)
+    ctx.clip()
+
+    const elements = (designElements || []).filter((el) => el.visible && el.side === side)
+    for (const element of elements) {
+      ctx.save()
+      ctx.translate((element.x + element.width / 2) * sx, (element.y + element.height / 2) * sy)
+      ctx.rotate((element.rotation * Math.PI) / 180)
+      ctx.translate((-element.width / 2) * sx, (-element.height / 2) * sy)
+
+      if (element.type === "text") {
+        ctx.fillStyle = element.color || "#111827"
+        ctx.font = `${(element.fontSize || 24) * fontScale}px ${element.fontFamily || "Arial"}`
+        ctx.textAlign = "center"
+        ctx.textBaseline = "middle"
+        ctx.fillText(element.content, (element.width * sx) / 2, (element.height * sy) / 2, element.width * sx)
+      } else if (element.content) {
+        try {
+          const img = await loadImage(element.content)
+          ctx.drawImage(img, 0, 0, element.width * sx, element.height * sy)
+        } catch {
+          // skip
+        }
+      }
+
+      ctx.restore()
+    }
+
+    ctx.restore()
+    return canvas.toDataURL("image/png")
+  }
+
+  const computeTryOnSignature = () => {
+    const normElements = [...(designElements || [])]
+      .map((el) => ({
+        id: el.id,
+        type: el.type,
+        content: el.content,
+        x: el.x,
+        y: el.y,
+        width: el.width,
+        height: el.height,
+        rotation: el.rotation,
+        fontSize: el.fontSize,
+        fontFamily: el.fontFamily,
+        color: el.color,
+        visible: el.visible,
+        side: el.side,
+      }))
+      .sort((a, b) => String(a.id).localeCompare(String(b.id)))
+
+    const sigObj = {
+      selections,
+      elements: normElements,
+      gender: tryOnModelGender,
+    }
+    return JSON.stringify(sigObj)
+  }
+
+  const loadModelFile = async (src: string) => {
+    const resp = await fetch(src)
+    if (!resp.ok) {
+      throw new Error(`无法加载模特图片: ${src}`)
+    }
+    const blob = await resp.blob()
+    const filename = src.split("/").pop() || "model.png"
+    return new File([blob], filename, { type: blob.type || "image/png" })
+  }
+
+  const callVirtualTryOn = async (person: File, clothDataUrl: string, side: "front" | "back") => {
+    const form = new FormData()
+    form.append("person", person)
+    form.append("cloth", dataUrlToBlob(clothDataUrl), `cloth-${side}.png`)
+
+    const resp = await fetch("/api/virtual-tryon", {
+      method: "POST",
+      body: form,
+    })
+
+    const json = (await resp.json().catch(() => null)) as
+      | { success?: boolean; imageUrl?: string; error?: string; details?: string }
+      | null
+
+    if (!resp.ok || !json?.success || !json.imageUrl) {
+      const msg = json?.details || json?.error || "试穿失败"
+      throw new Error(msg)
+    }
+
+    return json.imageUrl
+  }
+
+  const DEFAULT_CANVAS_ZOOM = 1.6
+  const [canvasZoom, setCanvasZoom] = useState(DEFAULT_CANVAS_ZOOM)
   const [isDragging, setIsDragging] = useState(false)
   const [isResizing, setIsResizing] = useState(false)
   const [isRotating, setIsRotating] = useState(false)
@@ -149,6 +414,90 @@ export default function DesignEditorPage() {
 
   const canvasMeta = useMemo(() => buildCanvasMeta(selections?.color), [selections])
   const printArea = canvasMeta.printArea
+
+  const isDev = process.env.NODE_ENV !== "production"
+  const [isCalibratingPrintArea, setIsCalibratingPrintArea] = useState(false)
+  const [draftPrintAreaCanvas, setDraftPrintAreaCanvas] = useState<null | {
+    x: number
+    y: number
+    width: number
+    height: number
+  }>(null)
+  const calibrateStartRef = useRef<null | { x: number; y: number }>(null)
+
+  const canvasPointFromMouse = (e: React.MouseEvent) => {
+    const rect = canvasRef.current?.getBoundingClientRect()
+    if (!rect) return null
+    const rx = (e.clientX - rect.left) / rect.width
+    const ry = (e.clientY - rect.top) / rect.height
+    return {
+      x: Math.max(0, Math.min(CANVAS_SIZE.width, rx * CANVAS_SIZE.width)),
+      y: Math.max(0, Math.min(CANVAS_SIZE.height, ry * CANVAS_SIZE.height)),
+    }
+  }
+
+  const currentPrintArea200 = useMemo(() => {
+    const sx = 200 / CANVAS_SIZE.width
+    const sy = 200 / CANVAS_SIZE.height
+    return {
+      x: Math.round(printArea.x * sx),
+      y: Math.round(printArea.y * sy),
+      width: Math.round(printArea.width * sx),
+      height: Math.round(printArea.height * sy),
+    }
+  }, [printArea.x, printArea.y, printArea.width, printArea.height])
+
+  const draftPrintArea200 = useMemo(() => {
+    if (!draftPrintAreaCanvas) return null
+    const sx = 200 / CANVAS_SIZE.width
+    const sy = 200 / CANVAS_SIZE.height
+    return {
+      x: Math.round(draftPrintAreaCanvas.x * sx),
+      y: Math.round(draftPrintAreaCanvas.y * sy),
+      width: Math.round(draftPrintAreaCanvas.width * sx),
+      height: Math.round(draftPrintAreaCanvas.height * sy),
+    }
+  }, [draftPrintAreaCanvas])
+
+  const handleCalibrateMouseDown = (e: React.MouseEvent) => {
+    if (!isCalibratingPrintArea) return
+    e.preventDefault()
+    e.stopPropagation()
+    const p = canvasPointFromMouse(e)
+    if (!p) return
+    calibrateStartRef.current = p
+    setDraftPrintAreaCanvas({ x: p.x, y: p.y, width: 0, height: 0 })
+  }
+
+  const handleCalibrateMouseMove = (e: React.MouseEvent) => {
+    if (!isCalibratingPrintArea) return
+    if (!calibrateStartRef.current) return
+    e.preventDefault()
+    e.stopPropagation()
+    const p = canvasPointFromMouse(e)
+    if (!p) return
+    const start = calibrateStartRef.current
+    const x = Math.min(start.x, p.x)
+    const y = Math.min(start.y, p.y)
+    const width = Math.abs(p.x - start.x)
+    const height = Math.abs(p.y - start.y)
+    setDraftPrintAreaCanvas({ x, y, width, height })
+  }
+
+  const handleCalibrateMouseUp = (e: React.MouseEvent) => {
+    if (!isCalibratingPrintArea) return
+    if (!calibrateStartRef.current) return
+    e.preventDefault()
+    e.stopPropagation()
+    calibrateStartRef.current = null
+  }
+
+  useEffect(() => {
+    if (!isCalibratingPrintArea) {
+      calibrateStartRef.current = null
+    }
+  }, [isCalibratingPrintArea])
+
   const shirtFill = useMemo(() => getShirtColorHex(selections?.color), [selections])
   const shirtPhotoSrc = useMemo(() => getShirtPhotoSrc(selections?.color), [selections])
   const titleText = useMemo(() => {
@@ -362,7 +711,7 @@ export default function DesignEditorPage() {
   }
 
   const handleResetZoom = () => {
-    setCanvasZoom(1)
+    setCanvasZoom(DEFAULT_CANVAS_ZOOM)
   }
 
   const rotateElement = (elementId: string, degrees: number) => {
@@ -463,18 +812,120 @@ export default function DesignEditorPage() {
   const visibleCurrentElements = currentSideElements.filter((el) => el.visible)
   const otherSideCount = designElements.filter((el) => el.side === (showFront ? "back" : "front")).length
 
-  const handleContinueToPreview = () => {
-    const designData = {
-      selections,
-      elements: designElements,
-      sides: {
-        front: designElements.filter((el) => el.side === "front"),
-        back: designElements.filter((el) => el.side === "back"),
-      },
-      canvas: { ...canvasMeta },
+  const handleContinueToPreview = async () => {
+    if (isContinuingToPreview) return
+    setIsContinuingToPreview(true)
+    setContinuePercent(1)
+
+    const bumpTo = (max: number) => {
+      if (continueProgressTimerRef.current) {
+        window.clearInterval(continueProgressTimerRef.current)
+        continueProgressTimerRef.current = null
+      }
+      continueProgressTimerRef.current = window.setInterval(() => {
+        setContinuePercent((prev) => {
+          if (prev >= max) return prev
+          return Math.min(max, prev + 1)
+        })
+      }, 180)
     }
-    localStorage.setItem("designData", JSON.stringify(designData))
-    router.push("/design/preview")
+
+    try {
+      bumpTo(20)
+
+      const signature = computeTryOnSignature()
+      const cachedRaw = (() => {
+        try {
+          return window.localStorage.getItem(TRYON_CACHE_STORAGE_KEY)
+        } catch {
+          return null
+        }
+      })()
+      const cached = (cachedRaw ? (JSON.parse(cachedRaw) as TryOnCache) : null) as TryOnCache | null
+
+      // Always persist design data for preview.
+      const designData = {
+        selections,
+        elements: designElements,
+        sides: {
+          front: designElements.filter((el) => el.side === "front"),
+          back: designElements.filter((el) => el.side === "back"),
+        },
+        canvas: { ...canvasMeta },
+      }
+      localStorage.setItem("designData", JSON.stringify(designData))
+
+      // If nothing changed, reuse try-on cache and go straight to preview.
+      if (
+        cached &&
+        cached.signature === signature &&
+        cached.gender === tryOnModelGender &&
+        typeof cached.front === "string" &&
+        typeof cached.back === "string" &&
+        cached.front.length > 0 &&
+        cached.back.length > 0
+      ) {
+        setContinuePercent(100)
+        if (continueProgressTimerRef.current) {
+          window.clearInterval(continueProgressTimerRef.current)
+          continueProgressTimerRef.current = null
+        }
+        router.push("/design/preview")
+        return
+      }
+
+      bumpTo(35)
+      const [personFront, personBack] = await Promise.all([
+        loadModelFile(getTryOnModelSrc(tryOnModelGender, "front")),
+        loadModelFile(getTryOnModelSrc(tryOnModelGender, "back")),
+      ])
+
+      bumpTo(45)
+      const [clothFront, clothBack] = await Promise.all([
+        renderTryOnClothSnapshot("front"),
+        renderTryOnClothSnapshot("back"),
+      ])
+
+      if (!clothFront || !clothBack) {
+        throw new Error("无法生成衣服快照")
+      }
+
+      bumpTo(65)
+      const tryOnFront = await callVirtualTryOn(personFront, clothFront, "front")
+
+      bumpTo(85)
+      const tryOnBack = await callVirtualTryOn(personBack, clothBack, "back")
+
+      const cache: TryOnCache = {
+        signature,
+        gender: tryOnModelGender,
+        front: tryOnFront,
+        back: tryOnBack,
+        createdAt: Date.now(),
+      }
+      try {
+        window.localStorage.setItem(TRYON_CACHE_STORAGE_KEY, JSON.stringify(cache))
+      } catch {
+        // ignore storage failures
+      }
+
+      setContinuePercent(100)
+      if (continueProgressTimerRef.current) {
+        window.clearInterval(continueProgressTimerRef.current)
+        continueProgressTimerRef.current = null
+      }
+      router.push("/design/preview")
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "试穿失败"
+      alert(message)
+      setIsContinuingToPreview(false)
+      setContinuePercent(0)
+      if (continueProgressTimerRef.current) {
+        window.clearInterval(continueProgressTimerRef.current)
+        continueProgressTimerRef.current = null
+      }
+      return
+    }
   }
 
   return (
@@ -502,18 +953,54 @@ export default function DesignEditorPage() {
             <Badge variant="outline">
               {translate({ zh: "第 2 步 / 共 3 步", en: "Step 2 of 3" })}
             </Badge>
-            <Button onClick={handleContinueToPreview} disabled={designElements.length === 0}>
-              {translate({ zh: "前往预览", en: "Continue to Preview" })}
-              <ArrowRight className="w-4 h-4 ml-2" />
+
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-muted-foreground">
+                {translate({ zh: "模特", en: "Model" })}
+              </span>
+              <div className="flex items-center gap-1">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={tryOnModelGender === "male" ? "default" : "outline"}
+                  onClick={() => setTryOnModelGender("male")}
+                  disabled={isContinuingToPreview}
+                >
+                  {translate({ zh: "男", en: "Male" })}
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant={tryOnModelGender === "female" ? "default" : "outline"}
+                  onClick={() => setTryOnModelGender("female")}
+                  disabled={isContinuingToPreview}
+                >
+                  {translate({ zh: "女", en: "Female" })}
+                </Button>
+              </div>
+            </div>
+
+            <Button onClick={handleContinueToPreview} disabled={designElements.length === 0 || isContinuingToPreview}>
+              {isContinuingToPreview ? (
+                <div className="w-[220px] flex items-center gap-3">
+                  <Progress value={continuePercent} className="flex-1" />
+                  <span className="text-sm tabular-nums w-12 text-right">{continuePercent}%</span>
+                </div>
+              ) : (
+                <>
+                  {translate({ zh: "前往预览", en: "Continue to Preview" })}
+                  <ArrowRight className="w-4 h-4 ml-2" />
+                </>
+              )}
             </Button>
           </div>
         </div>
       </header>
 
-      <div className="flex h-[calc(100vh-80px)]">
+      <div className="flex h-[calc(100vh-80px)] overflow-hidden">
         {/* Left Sidebar - Tools */}
-        <div className="w-80 border-r border-border bg-card/30 overflow-y-auto">
-          <div className="p-4">
+        <div className="w-80 border-r border-border bg-card/30 flex flex-col">
+          <div className="p-4 flex-1 overflow-y-auto">
             <h2 className="text-lg font-semibold mb-4">
               {translate({ zh: "设计工具", en: "Design Tools" })}
             </h2>
@@ -714,9 +1201,9 @@ export default function DesignEditorPage() {
         </div>
 
         {/* Main Canvas Area */}
-        <div className="flex-1 flex flex-col">
+        <div className="flex-1 flex flex-col min-w-0">
           {/* Canvas Controls */}
-          <div className="border-b border-border p-4 bg-card/30">
+          <div className="border-b border-border p-4 bg-card/30 shrink-0">
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-4">
                 <h3 className="font-semibold">{titleText}</h3>
@@ -752,21 +1239,96 @@ export default function DesignEditorPage() {
               </div>
             </div>
 
-            {/* Canvas */}
-            <div className="flex-1 p-8 bg-muted/20 overflow-auto">
-              <div className="max-w-md mx-auto flex justify-center">
-                <div
-                  ref={canvasRef}
-                  className="relative select-none"
-                  style={{
-                    width: CANVAS_SIZE.width,
-                    height: CANVAS_SIZE.height,
-                    transform: `scale(${canvasZoom})`,
-                    transformOrigin: "center",
+            {isDev && (
+              <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <Button
+                  variant={isCalibratingPrintArea ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => {
+                    setIsCalibratingPrintArea((v) => !v)
+                    calibrateStartRef.current = null
                   }}
                 >
+                  {isCalibratingPrintArea
+                    ? translate({ zh: "结束校准安全区", en: "Stop calibrating" })
+                    : translate({ zh: "校准安全区(拖拽画矩形)", en: "Calibrate print area (drag)" })}
+                </Button>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={async () => {
+                    const target = draftPrintArea200 || currentPrintArea200
+                    const text = `export const FIXED_PRINT_AREA_200 = ${JSON.stringify(target, null, 2)} as const\n`
+                    try {
+                      await navigator.clipboard.writeText(text)
+                    } catch {
+                      // ignore
+                    }
+                    console.log(text)
+                  }}
+                >
+                  {translate({ zh: "复制常量(并输出到控制台)", en: "Copy constant (and log)" })}
+                </Button>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setDraftPrintAreaCanvas(null)}
+                >
+                  {translate({ zh: "清除草稿", en: "Clear draft" })}
+                </Button>
+
+                <span>
+                  {translate({ zh: "当前(200坐标): ", en: "Current (200 coords): " })}
+                  {`${currentPrintArea200.x},${currentPrintArea200.y},${currentPrintArea200.width},${currentPrintArea200.height}`}
+                </span>
+                {draftPrintArea200 && (
+                  <span className="text-foreground">
+                    {translate({ zh: "草稿(200坐标): ", en: "Draft (200 coords): " })}
+                    {`${draftPrintArea200.x},${draftPrintArea200.y},${draftPrintArea200.width},${draftPrintArea200.height}`}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Canvas */}
+          <div className="flex-1 p-4 bg-muted/20 overflow-auto">
+            <div className="min-h-full w-full mx-auto flex items-center justify-center">
+              <div
+                ref={canvasRef}
+                className="relative select-none"
+                style={{
+                  width: CANVAS_SIZE.width,
+                  height: CANVAS_SIZE.height,
+                  transform: `scale(${canvasZoom})`,
+                  transformOrigin: "center",
+                }}
+              >
+                  {isDev && isCalibratingPrintArea && (
+                    <div
+                      className="absolute inset-0 z-40 cursor-crosshair"
+                      onMouseDown={handleCalibrateMouseDown}
+                      onMouseMove={handleCalibrateMouseMove}
+                      onMouseUp={handleCalibrateMouseUp}
+                    />
+                  )}
+
+                  {isDev && draftPrintAreaCanvas && (
+                    <div
+                      className="absolute z-30 border-2 border-blue-500/80 bg-blue-500/10 rounded-md pointer-events-none"
+                      style={{
+                        left: draftPrintAreaCanvas.x,
+                        top: draftPrintAreaCanvas.y,
+                        width: draftPrintAreaCanvas.width,
+                        height: draftPrintAreaCanvas.height,
+                      }}
+                    />
+                  )}
+
                   {shirtPhotoSrc ? (
-                    <Image
+                    <NextImage
                       src={shirtPhotoSrc}
                       alt={translate({ zh: "T 恤底图", en: "T-shirt base" })}
                       fill
@@ -839,7 +1401,7 @@ export default function DesignEditorPage() {
                           </div>
                         ) : (
                           <div className="relative w-full h-full pointer-events-none">
-                            <Image
+                            <NextImage
                               src={element.content || "/placeholder.svg"}
                               alt={translate({ zh: "设计元素", en: "Design element" })}
                               fill
@@ -908,17 +1470,7 @@ export default function DesignEditorPage() {
                   </div>
                 </div>
               </div>
-
-              <div className="mt-4 text-center text-sm text-muted-foreground">
-                <p>
-                  {translate({
-                    zh: "💡 画布采用服装轮廓，元素被中心虚线框裁剪。点击选择 • 拖动移动 • 拖动边角缩放 • 拖动绿色把手旋转",
-                    en: "💡 Elements are clipped inside the dashed print area. Click to select • Drag to move • Drag corners to resize • Drag green handle to rotate",
-                  })}
-                </p>
-              </div>
             </div>
-          </div>
         </div>
       </div>
     </div>

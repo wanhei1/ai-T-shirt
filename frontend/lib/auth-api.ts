@@ -67,6 +67,9 @@ export interface User {
   email: string;
   created_at?: string;
   membership?: unknown;
+  invite_code?: string;
+  invited_by_user_id?: number | null;
+  invite_redeemed_at?: string | null;
 }
 
 export interface LoginResponse {

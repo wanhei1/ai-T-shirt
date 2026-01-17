@@ -14,6 +14,18 @@ import { useLanguage } from "@/contexts/language-context"
 import { buildCanvasMeta, CANVAS_SIZE, getShirtColorHex, getShirtPhotoSrc } from "@/lib/design-canvas"
 import type { DesignData, DesignElement, CanvasMeta } from "@/types/design"
 
+type TryOnModelGender = "male" | "female"
+const TRYON_MODEL_STORAGE_KEY = "tryOnModelGender"
+const TRYON_CACHE_STORAGE_KEY = "tryOnCacheV1"
+
+type TryOnCache = {
+  signature: string
+  gender: "male" | "female"
+  front: string | null
+  back: string | null
+  createdAt: number
+}
+
 export default function PreviewPage() {
   const router = useRouter()
   const { translate } = useLanguage()
@@ -23,10 +35,42 @@ export default function PreviewPage() {
   const [isExporting, setIsExporting] = useState(false)
   const [orderPlaced, setOrderPlaced] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [tryOnPersonFile, setTryOnPersonFile] = useState<File | null>(null)
-  const [tryOnImageUrl, setTryOnImageUrl] = useState<string | null>(null)
-  const [tryOnError, setTryOnError] = useState<string | null>(null)
   const [isTryOnLoading, setIsTryOnLoading] = useState(false)
+  const [tryOnError, setTryOnError] = useState<string | null>(null)
+  const [tryOnEnabled, setTryOnEnabled] = useState(false)
+  const [tryOnSnapshots, setTryOnSnapshots] = useState<{ front: string | null; back: string | null } | null>(null)
+
+  const activeTryOnUrl = useMemo(() => {
+    if (!tryOnEnabled) return null
+    return currentView === "back" ? tryOnSnapshots?.back ?? null : tryOnSnapshots?.front ?? null
+  }, [currentView, tryOnEnabled, tryOnSnapshots])
+
+  // 进入预览页后直接读取编辑页生成的试穿缓存
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      const raw = window.localStorage.getItem(TRYON_CACHE_STORAGE_KEY)
+      if (!raw) return
+      const parsed = JSON.parse(raw) as TryOnCache
+      const front = typeof parsed.front === "string" && parsed.front.length > 0 ? parsed.front : null
+      const back = typeof parsed.back === "string" && parsed.back.length > 0 ? parsed.back : null
+      if (front || back) {
+        setTryOnSnapshots({ front, back })
+        setTryOnEnabled(true)
+      }
+    } catch {
+      // ignore
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!tryOnEnabled) return
+    if (activeTryOnUrl) return
+
+    // If the current side has no try-on result, fall back to design preview
+    // instead of showing a blank try-on view.
+    setTryOnEnabled(false)
+  }, [activeTryOnUrl, tryOnEnabled])
 
   const resolvedCanvasMeta: CanvasMeta = useMemo(() => {
     if (designData?.canvas) return designData.canvas
@@ -44,6 +88,69 @@ export default function PreviewPage() {
       img.onerror = () => reject(new Error("Failed to load image"))
       img.src = src
     })
+
+  const renderTryOnClothSnapshot = async (side: "front" | "back") => {
+    if (!designData) return null
+
+    // Prefer rendering try-on cloth on the base shirt image at its native size.
+    // This avoids adding an artificial background behind the garment, which can
+    // confuse mask generation compared with backend inputs.
+    if (!shirtPhotoSrc) {
+      return renderSnapshot(side)
+    }
+
+    const meta = resolvedCanvasMeta
+    const base = await loadImage(shirtPhotoSrc)
+    const baseWidth = base.naturalWidth || base.width
+    const baseHeight = base.naturalHeight || base.height
+
+    const canvas = document.createElement("canvas")
+    canvas.width = baseWidth
+    canvas.height = baseHeight
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return null
+
+    // Keep canvas transparent; only draw the garment and the print.
+    ctx.drawImage(base, 0, 0, canvas.width, canvas.height)
+
+    const sx = canvas.width / meta.width
+    const sy = canvas.height / meta.height
+    const fontScale = (sx + sy) / 2
+
+    ctx.save()
+    ctx.translate(meta.printArea.x * sx, meta.printArea.y * sy)
+    ctx.beginPath()
+    ctx.rect(0, 0, meta.printArea.width * sx, meta.printArea.height * sy)
+    ctx.clip()
+
+    const elements = (designData.elements || []).filter((el) => el.visible && el.side === side)
+    for (const element of elements) {
+      ctx.save()
+      ctx.translate((element.x + element.width / 2) * sx, (element.y + element.height / 2) * sy)
+      ctx.rotate((element.rotation * Math.PI) / 180)
+      ctx.translate((-element.width / 2) * sx, (-element.height / 2) * sy)
+
+      if (element.type === "text") {
+        ctx.fillStyle = element.color || "#111827"
+        ctx.font = `${(element.fontSize || 24) * fontScale}px ${element.fontFamily || "Arial"}`
+        ctx.textAlign = "center"
+        ctx.textBaseline = "middle"
+        ctx.fillText(element.content, (element.width * sx) / 2, (element.height * sy) / 2, element.width * sx)
+      } else if (element.content) {
+        try {
+          const img = await loadImage(element.content)
+          ctx.drawImage(img, 0, 0, element.width * sx, element.height * sy)
+        } catch (error) {
+          console.warn("Skip image in try-on cloth snapshot", error)
+        }
+      }
+
+      ctx.restore()
+    }
+
+    ctx.restore()
+    return canvas.toDataURL("image/png")
+  }
 
   const renderSnapshot = async (side: "front" | "back") => {
     if (!designData) return null
@@ -201,25 +308,65 @@ export default function PreviewPage() {
     return new Blob([arr], { type: mime })
   }
 
-  const runTryOn = async () => {
-    if (!designData) return
-    if (!tryOnPersonFile) {
-      setTryOnError(translate({ zh: "请先上传一张模特照片", en: "Please upload a model photo first" }))
-      return
+  const getTryOnModelSrc = (gender: TryOnModelGender, side: "front" | "back") => {
+    if (gender === "female") {
+      return side === "back" ? "/femalemodelback.png" : "/femalemodel.png"
     }
+    return side === "back" ? "/malemodelback.jpg" : "/malemodel.png"
+  }
 
+  const computeTryOnSignature = (gender: TryOnModelGender) => {
+    const normElements = [...(designData?.elements || [])]
+      .map((el) => ({
+        id: el.id,
+        type: el.type,
+        content: el.content,
+        x: el.x,
+        y: el.y,
+        width: el.width,
+        height: el.height,
+        rotation: el.rotation,
+        fontSize: el.fontSize,
+        fontFamily: el.fontFamily,
+        color: el.color,
+        visible: el.visible,
+        side: el.side,
+      }))
+      .sort((a, b) => String(a.id).localeCompare(String(b.id)))
+
+    return JSON.stringify({ selections: designData?.selections, elements: normElements, gender })
+  }
+
+  const loadModelFile = async (src: string) => {
+    const resp = await fetch(src)
+    if (!resp.ok) {
+      throw new Error(`无法加载模特图片: ${src}`)
+    }
+    const blob = await resp.blob()
+    const filename = src.split("/").pop() || "model.png"
+    return new File([blob], filename, { type: blob.type || "image/png" })
+  }
+
+  const runTryOn = async (side: "front" | "back") => {
+    if (!designData) return
     setIsTryOnLoading(true)
     setTryOnError(null)
 
     try {
-      const clothSnapshot = await renderSnapshot(currentView)
+      const rawGender = (typeof window !== "undefined" ? window.localStorage.getItem(TRYON_MODEL_STORAGE_KEY) : null) as
+        | TryOnModelGender
+        | null
+      const gender: TryOnModelGender = rawGender === "female" ? "female" : "male"
+      const personFile = await loadModelFile(getTryOnModelSrc(gender, side))
+
+      const clothSnapshot = await renderTryOnClothSnapshot(side)
       if (!clothSnapshot) {
         throw new Error("无法生成衣服快照")
       }
 
       const form = new FormData()
-      form.append("person", tryOnPersonFile)
-      form.append("cloth", dataUrlToBlob(clothSnapshot), `cloth-${currentView}.png`)
+      form.append("person", personFile)
+      form.append("cloth", dataUrlToBlob(clothSnapshot), `cloth-${side}.png`)
 
       const resp = await fetch("/api/virtual-tryon", {
         method: "POST",
@@ -235,13 +382,41 @@ export default function PreviewPage() {
         throw new Error(msg)
       }
 
-      setTryOnImageUrl(json.imageUrl)
+      const next = {
+        front: side === "front" ? json.imageUrl : tryOnSnapshots?.front ?? null,
+        back: side === "back" ? json.imageUrl : tryOnSnapshots?.back ?? null,
+      }
+
+      setTryOnSnapshots(next)
+      setTryOnEnabled(true)
+
+      const cache: TryOnCache = {
+        signature: computeTryOnSignature(gender),
+        gender,
+        front: next.front,
+        back: next.back,
+        createdAt: Date.now(),
+      }
+      try {
+        window.localStorage.setItem(TRYON_CACHE_STORAGE_KEY, JSON.stringify(cache))
+      } catch {
+        // ignore
+      }
     } catch (error) {
-      setTryOnImageUrl(null)
       setTryOnError(error instanceof Error ? error.message : "试穿失败")
     } finally {
       setIsTryOnLoading(false)
     }
+  }
+
+  const handlePreviewClick = () => {
+    if (isTryOnLoading) return
+    // 点击逻辑：已显示试穿 -> 切回设计预览；否则生成当前面的试穿
+    if (tryOnEnabled && activeTryOnUrl) {
+      setTryOnEnabled(false)
+      return
+    }
+    runTryOn(currentView).catch(() => {})
   }
 
   const placeOrder = async () => {
@@ -273,13 +448,29 @@ export default function PreviewPage() {
         snapshots: { front: frontSnapshot, back: backSnapshot },
       }
 
+      const cacheRaw = (() => {
+        try {
+          return window.localStorage.getItem(TRYON_CACHE_STORAGE_KEY)
+        } catch {
+          return null
+        }
+      })()
+      const cache = (cacheRaw ? (JSON.parse(cacheRaw) as TryOnCache) : null) as TryOnCache | null
+      const tryOnFront = typeof cache?.front === "string" && cache.front.length > 0 ? cache.front : null
+      const tryOnBack = typeof cache?.back === "string" && cache.back.length > 0 ? cache.back : null
+
       const payload = {
         total,
         // Save full element layout info (position/size/rotation/side/etc) so the order can be faithfully reproduced.
         items: designData.elements,
         selections: designData.selections,
         design: { ...designData, canvas: canvasForSave },
-        canvas: { frontSnapshot, backSnapshot, meta: resolvedCanvasMeta },
+        // 订单存储的 canvas_* 用于商城/首页展示：优先使用试穿结果
+        canvas: {
+          frontSnapshot: tryOnFront ?? frontSnapshot,
+          backSnapshot: tryOnBack ?? backSnapshot,
+          meta: resolvedCanvasMeta,
+        },
         publishToAll: true,
         sourceAllId: null,
         shipping_info: {}
@@ -294,9 +485,19 @@ export default function PreviewPage() {
       console.error('Order submission failed:', error)
       const status = (error as { status?: number })?.status
       const message = (error as Error)?.message || ""
-      if (status === 401 || status === 403 || message.includes("authenticate token")) {
+      if (status === 403 && message.toLowerCase().includes("membership")) {
+        alert(translate({ zh: "需要有效会员才能下单", en: "An active membership is required to place orders." }))
+        router.push("/membership")
+        return
+      }
+      if (status === 401 || message.includes("authenticate token")) {
         alert(translate({ zh: "登录已失效，请重新登录", en: "Session expired, please sign in again." }))
         router.push("/auth")
+        return
+      }
+      if (status === 402 || message.toLowerCase().includes("insufficient")) {
+        alert(translate({ zh: "会员余额不足，请充值/续费后再下单", en: "Insufficient membership balance. Please top up/renew to continue." }))
+        router.push("/membership")
         return
       }
       alert(translate({ zh: "下单失败，请重试", en: "Failed to place order. Please try again." }))
@@ -423,37 +624,47 @@ export default function PreviewPage() {
                   <div className="max-w-md mx-auto flex justify-center">
                     <div
                       ref={canvasRef}
-                      className="relative select-none border-2 border-border rounded-lg shadow-lg"
+                      className="relative select-none border-2 border-border rounded-lg shadow-lg cursor-pointer"
                       style={{ width: CANVAS_SIZE.width, height: CANVAS_SIZE.height }}
+                      onClick={handlePreviewClick}
+                      title={translate({ zh: "点击生成/切换模特试穿效果", en: "Click to generate/toggle virtual try-on" })}
                     >
-                      {shirtPhotoSrc ? (
+                      {tryOnEnabled && activeTryOnUrl ? (
                         <img
-                          src={shirtPhotoSrc}
-                          alt={translate({ zh: "T 恤底图", en: "T-shirt base" })}
+                          src={activeTryOnUrl}
+                          alt={translate({ zh: "模特试穿效果", en: "Try-on result" })}
                           className="absolute inset-0 w-full h-full object-contain"
                         />
                       ) : (
-                        <svg aria-hidden viewBox="0 0 200 200" className="absolute inset-0 w-full h-full" role="presentation">
-                          <path
-                            d="M70 30 L90 30 Q100 50 110 30 L130 30 Q145 30 150 45 L175 75 L155 95 L155 165 L45 165 L45 95 L25 75 L50 45 Q55 30 70 30 Z"
-                            fill={shirtFill}
-                            stroke="#444"
-                            strokeWidth={2}
-                            strokeLinejoin="round"
-                            strokeLinecap="round"
-                          />
-                        </svg>
-                      )}
+                        <>
+                          {shirtPhotoSrc ? (
+                            <img
+                              src={shirtPhotoSrc}
+                              alt={translate({ zh: "T 恤底图", en: "T-shirt base" })}
+                              className="absolute inset-0 w-full h-full object-contain"
+                            />
+                          ) : (
+                            <svg aria-hidden viewBox="0 0 200 200" className="absolute inset-0 w-full h-full" role="presentation">
+                              <path
+                                d="M70 30 L90 30 Q100 50 110 30 L130 30 Q145 30 150 45 L175 75 L155 95 L155 165 L45 165 L45 95 L25 75 L50 45 Q55 30 70 30 Z"
+                                fill={shirtFill}
+                                stroke="#444"
+                                strokeWidth={2}
+                                strokeLinejoin="round"
+                                strokeLinecap="round"
+                              />
+                            </svg>
+                          )}
 
-                      <div
-                        className="absolute overflow-hidden"
-                        style={{
-                          left: resolvedCanvasMeta.printArea.x,
-                          top: resolvedCanvasMeta.printArea.y,
-                          width: resolvedCanvasMeta.printArea.width,
-                          height: resolvedCanvasMeta.printArea.height,
-                        }}
-                      >
+                          <div
+                            className="absolute overflow-hidden"
+                            style={{
+                              left: resolvedCanvasMeta.printArea.x,
+                              top: resolvedCanvasMeta.printArea.y,
+                              width: resolvedCanvasMeta.printArea.width,
+                              height: resolvedCanvasMeta.printArea.height,
+                            }}
+                          >
 
                         {designData.elements
                           .filter((el) => el.visible && el.side === currentView)
@@ -506,7 +717,37 @@ export default function PreviewPage() {
                             </div>
                           </div>
                         )}
-                      </div>
+                          </div>
+                        </>
+                      )}
+
+                      {isTryOnLoading ? (
+                        <div className="absolute inset-0 flex items-center justify-center bg-background/50">
+                          <div className="text-sm text-muted-foreground">
+                            {translate({ zh: "试穿生成中...", en: "Generating try-on..." })}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      {tryOnError ? (
+                        <div className="absolute bottom-2 left-2 right-2 text-xs text-destructive bg-background/80 border border-border rounded px-2 py-1">
+                          {tryOnError}
+                        </div>
+                      ) : null}
+
+                      {!tryOnEnabled && !isTryOnLoading ? (
+                        <div className="absolute bottom-2 left-2 right-2 text-xs text-muted-foreground bg-background/80 border border-border rounded px-2 py-1">
+                          {translate({ zh: "点击画布生成模特试穿效果", en: "Click to generate try-on" })}
+                        </div>
+                      ) : null}
+
+                      {tryOnEnabled && !activeTryOnUrl ? (
+                        <div className="absolute inset-0 flex items-center justify-center bg-background/50">
+                          <div className="text-sm text-muted-foreground">
+                            {translate({ zh: "未找到试穿结果，点击画布即可生成", en: "Try-on not found. Click to generate." })}
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   </div>
                 </CardContent>
@@ -644,52 +885,6 @@ export default function PreviewPage() {
                       <span>${estimatedTotal.toFixed(2)}</span>
                     </div>
                   </div>
-                </CardContent>
-              </Card>
-
-              <Card>
-                <CardHeader>
-                  <CardTitle>{translate({ zh: "模特试穿", en: "Virtual Try-On" })}</CardTitle>
-                  <CardDescription>
-                    {translate({
-                      zh: "上传模特照片，使用当前视角的衣服设计进行试穿预览",
-                      en: "Upload a model photo and preview try-on with the current view design",
-                    })}
-                  </CardDescription>
-                </CardHeader>
-                <CardContent className="space-y-4">
-                  <div className="space-y-2">
-                    <div className="text-sm text-muted-foreground">
-                      {translate({ zh: "模特照片", en: "Model photo" })}
-                    </div>
-                    <Input
-                      type="file"
-                      accept="image/*"
-                      onChange={(e) => {
-                        const f = e.target.files?.[0] || null
-                        setTryOnPersonFile(f)
-                        setTryOnImageUrl(null)
-                        setTryOnError(null)
-                      }}
-                    />
-                  </div>
-
-                  <Button onClick={runTryOn} className="w-full" disabled={isTryOnLoading || !tryOnPersonFile}>
-                    {isTryOnLoading
-                      ? translate({ zh: "生成中...", en: "Generating..." })
-                      : translate({ zh: "生成试穿图", en: "Generate Try-On" })}
-                  </Button>
-
-                  {tryOnError ? <p className="text-sm text-destructive">{tryOnError}</p> : null}
-
-                  {tryOnImageUrl ? (
-                    <div className="space-y-2">
-                      <div className="text-sm text-muted-foreground">
-                        {translate({ zh: "试穿结果", en: "Result" })}
-                      </div>
-                      <img src={tryOnImageUrl} alt="tryon" className="w-full rounded-lg border border-border" />
-                    </div>
-                  ) : null}
                 </CardContent>
               </Card>
 
