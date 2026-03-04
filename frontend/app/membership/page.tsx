@@ -67,6 +67,10 @@ interface MembershipPlan {
   highlight?: { zh: string; en: string };
 }
 
+const BASE_MONTHLY_AMOUNT = 198;
+const DISCOUNT_RATE = 0.85;
+const formatPrice = (amount: number) => `¥${amount.toFixed(2)}`;
+
 const MEMBERSHIP_PLANS: MembershipPlan[] = [
   {
     id: "monthly",
@@ -75,7 +79,7 @@ const MEMBERSHIP_PLANS: MembershipPlan[] = [
       zh: "适合短期密集创作，随开随用",
       en: "Perfect for focused short sprints of creativity",
     },
-    priceLabel: { zh: "¥188", en: "¥188" },
+    priceLabel: { zh: formatPrice(BASE_MONTHLY_AMOUNT), en: formatPrice(BASE_MONTHLY_AMOUNT) },
     billing: { zh: "按月计费", en: "Billed monthly" },
     highlight: { zh: "灵活续订", en: "Flexible renewal" },
   },
@@ -86,7 +90,10 @@ const MEMBERSHIP_PLANS: MembershipPlan[] = [
       zh: "季度折扣更划算，适合持续规划",
       en: "Discounted bundle for ongoing projects",
     },
-    priceLabel: { zh: "¥564", en: "¥564" },
+    priceLabel: {
+      zh: formatPrice(BASE_MONTHLY_AMOUNT * 3 * DISCOUNT_RATE),
+      en: formatPrice(BASE_MONTHLY_AMOUNT * 3 * DISCOUNT_RATE),
+    },
     billing: { zh: "每季度一次", en: "Every quarter" },
     highlight: { zh: "热门", en: "Popular" },
   },
@@ -97,7 +104,10 @@ const MEMBERSHIP_PLANS: MembershipPlan[] = [
       zh: "中长期创作者的稳定选择",
       en: "Steady value for half-year visionaries",
     },
-    priceLabel: { zh: "¥1128", en: "¥1128" },
+    priceLabel: {
+      zh: formatPrice(BASE_MONTHLY_AMOUNT * 6 * DISCOUNT_RATE),
+      en: formatPrice(BASE_MONTHLY_AMOUNT * 6 * DISCOUNT_RATE),
+    },
     billing: { zh: "每半年一次", en: "Twice per year" },
   },
   {
@@ -107,7 +117,10 @@ const MEMBERSHIP_PLANS: MembershipPlan[] = [
       zh: "全年超值畅享，省心之选",
       en: "Best value for year-round creators",
     },
-    priceLabel: { zh: "¥2256", en: "¥2256" },
+    priceLabel: {
+      zh: formatPrice(BASE_MONTHLY_AMOUNT * 12 * DISCOUNT_RATE),
+      en: formatPrice(BASE_MONTHLY_AMOUNT * 12 * DISCOUNT_RATE),
+    },
     billing: { zh: "每年一次", en: "Billed annually" },
     highlight: { zh: "最高优惠", en: "Best savings" },
   },

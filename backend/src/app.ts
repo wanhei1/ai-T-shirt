@@ -5,6 +5,8 @@ import connectToDatabase from './config/database';
 import { Pool } from 'pg';
 import { createRoutes } from './routes';
 import './types'; // 导入类型扩展
+import { hashPassword } from './utils';
+import { startJobWorkers } from './queue/workers';
 
 dotenv.config();
 
@@ -102,6 +104,7 @@ const initializeApp = async () => {
                     invite_code VARCHAR(32) UNIQUE,
                     invited_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
                     invite_redeemed_at TIMESTAMP,
+                    is_admin BOOLEAN DEFAULT FALSE,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             `);
@@ -111,10 +114,45 @@ const initializeApp = async () => {
                 await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_code VARCHAR(32) UNIQUE`);
                 await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS invited_by_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL`);
                 await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS invite_redeemed_at TIMESTAMP`);
+                await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin BOOLEAN DEFAULT FALSE`);
                 await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_invite_code_unique ON users(invite_code)`);
                 await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_invited_by_user_id ON users(invited_by_user_id)`);
             } catch (err) {
                 console.warn('⚠️ Failed to ensure users referral columns:', (err as any)?.message || err);
+            }
+
+            // Ensure a default admin account exists.
+            try {
+                const adminEmail = process.env.ADMIN_EMAIL || 'admin@gmail.com';
+                const adminPassword = process.env.ADMIN_PASSWORD || '123456';
+
+                const existingAdmin = await pool.query(
+                    'SELECT id FROM users WHERE is_admin = TRUE LIMIT 1'
+                );
+
+                if (!existingAdmin.rows[0]) {
+                    const existingByEmail = await pool.query(
+                        'SELECT id FROM users WHERE email = $1 LIMIT 1',
+                        [adminEmail]
+                    );
+
+                    const hashed = await hashPassword(adminPassword);
+
+                    if (existingByEmail.rows[0]) {
+                        await pool.query(
+                            'UPDATE users SET is_admin = TRUE, password = $2 WHERE id = $1',
+                            [existingByEmail.rows[0].id, hashed]
+                        );
+                    } else {
+                        await pool.query(
+                            `INSERT INTO users (username, email, password, is_admin)
+                             VALUES ($1, $2, $3, TRUE)`,
+                            ['admin', adminEmail, hashed]
+                        );
+                    }
+                }
+            } catch (err) {
+                console.warn('⚠️ Failed to ensure default admin user:', (err as any)?.message || err);
             }
 
             // Track invite redemptions for auditing and stats.
@@ -150,6 +188,9 @@ const initializeApp = async () => {
                     selections JSONB,
                     design JSONB,
                     shipping_info JSONB,
+                    address TEXT,
+                    phone TEXT,
+                    order_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             `);
@@ -159,6 +200,16 @@ const initializeApp = async () => {
                 console.log('✅ Ensured orders.design column exists');
             } catch (err) {
                 console.warn('⚠️ Failed to ensure orders.design column:', (err as any)?.message || err);
+            }
+
+            // Ensure admin-facing fields exist on orders.
+            try {
+                await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS address TEXT`);
+                await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS phone TEXT`);
+                await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS order_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP`);
+                await pool.query(`UPDATE orders SET order_time = created_at WHERE order_time IS NULL`);
+            } catch (err) {
+                console.warn('⚠️ Failed to ensure orders address/phone/order_time columns:', (err as any)?.message || err);
             }
 
             // Ensure category exists for older installations (used as style tag, e.g. 抽象/写实/简约)
@@ -183,6 +234,33 @@ const initializeApp = async () => {
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             `);
+
+            // 购物车表：保存用户准备下单的设计
+            await pool.query(`
+                CREATE TABLE IF NOT EXISTS cart_items (
+                    id SERIAL PRIMARY KEY,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    quantity INTEGER NOT NULL DEFAULT 1,
+                    price NUMERIC(10,2) NOT NULL DEFAULT 0,
+                    category TEXT,
+                    items JSONB NOT NULL,
+                    selections JSONB,
+                    design JSONB,
+                    canvas_front TEXT,
+                    canvas_back TEXT,
+                    canvas_meta JSONB,
+                    source_all_id INTEGER REFERENCES all_designs(id) ON DELETE SET NULL,
+                    publish_to_all BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            `);
+            try {
+                await pool.query(`CREATE INDEX IF NOT EXISTS idx_cart_items_user_id ON cart_items(user_id)`);
+                await pool.query(`CREATE INDEX IF NOT EXISTS idx_cart_items_updated_at ON cart_items(updated_at DESC)`);
+            } catch (err) {
+                console.warn('⚠️ Failed to ensure cart_items indexes:', (err as any)?.message || err);
+            }
 
             // Gallery listing can be large; keep common sort/filter fast.
             try {
@@ -329,12 +407,22 @@ const initializeApp = async () => {
             });
         });
 
+        const stopWorkers = startJobWorkers();
+
         app.listen(PORT, () => {
             console.log(`🚀 Backend server is running on port ${PORT}`);
             console.log(`📡 API available at http://localhost:${PORT}/api`);
             console.log(`💚 Health check at http://localhost:${PORT}/health`);
             console.log(`🗄️ Database status: ${dbConnected ? '✅ Connected' : '❌ Disconnected'}`);
         });
+
+        const shutdown = async () => {
+            await stopWorkers();
+            process.exit(0);
+        };
+
+        process.on('SIGINT', shutdown);
+        process.on('SIGTERM', shutdown);
     } catch (error) {
         console.error('❌ Failed to initialize app:', error);
         process.exit(1);

@@ -4,19 +4,21 @@
   "description": "A T-shirt design editor with AI integration",
   "private": true,
   "scripts": {
+    "start": "concurrently \"npm run start:backend\" \"npm run start:frontend\"",
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
     "dev:frontend": "cd frontend && npm run dev",
-    "dev:backend": "cd backend && PORT=8183 npm run dev",
+    "dev:backend": "cd backend && PORT=8185 npm run dev",
     "build": "npm run build:frontend && npm run build:backend",
     "build:frontend": "cd frontend && npm run build",
     "build:backend": "cd backend && npm run build",
     "install:all": "npm install && cd frontend && npm install && cd ../backend && npm install",
     "clean": "cd frontend && npm run clean; cd ../backend && npm run clean",
     "test": "cd frontend && npm test && cd ../backend && npm test",
-    "start:backend": "cd backend && npm start",
+    "start:backend": "cd backend && PORT=8185 npm start",
     "start:frontend": "cd frontend && npm start"
   },
   "devDependencies": {
+    "baseline-browser-mapping": "^2.10.0",
     "concurrently": "^8.2.0"
   },
   "workspaces": [

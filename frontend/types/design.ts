@@ -32,6 +32,7 @@ export type CanvasMeta = {
 }
 
 export type DesignData = {
+  category?: string | null
   selections: TShirtSelections
   elements: DesignElement[]
   sides?: {

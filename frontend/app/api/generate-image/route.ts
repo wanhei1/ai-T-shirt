@@ -1,9 +1,4 @@
 import { type NextRequest, NextResponse } from "next/server"
-import { SimpleComfyUIClient } from "@/lib/simple-comfyui-client"
-import { writeFile } from "fs/promises"
-import path from "path"
-
-// --- Membership gate helpers (server-side) ---
 
 const apiUrlsString = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8189"
 const potentialApiUrls = apiUrlsString
@@ -37,297 +32,39 @@ async function getBackendBaseUrl(): Promise<string> {
   return determinedApiBaseUrl
 }
 
-type MembershipRecord = {
-  status?: string
-  expires_at?: string | null
-}
-
-function isMembershipActive(membership: MembershipRecord | null | undefined): boolean {
-  if (!membership) return false
-  if (membership.status && membership.status !== "active") return false
-  if (!membership.expires_at) return true
-  return new Date(membership.expires_at).getTime() >= Date.now()
-}
-
-async function requireActiveMembership(req: NextRequest) {
-  const authHeader = req.headers.get("authorization") || ""
-  const token = authHeader.startsWith("Bearer ") ? authHeader.slice("Bearer ".length) : ""
-
-  if (!token) {
-    return {
-      ok: false as const,
-      status: 401,
-      body: {
-        success: false,
-        code: "AUTH_REQUIRED",
-        error: "Authentication required",
-        zh: "请先登录",
-      },
-    }
-  }
-
-  const baseUrl = await getBackendBaseUrl()
-  const endpoint = new URL("/api/memberships/me", baseUrl).toString()
-
-  let response: Response
-  try {
-    response = await fetch(endpoint, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
-      signal: AbortSignal.timeout(5000),
-      cache: "no-store",
-    })
-  } catch (error) {
-    return {
-      ok: false as const,
-      status: 503,
-      body: {
-        success: false,
-        code: "BACKEND_UNAVAILABLE",
-        error: error instanceof Error ? error.message : "Backend unavailable",
-        zh: "后端服务不可用",
-      },
-    }
-  }
-
-  if (!response.ok) {
-    // Most likely token invalid/expired
-    return {
-      ok: false as const,
-      status: response.status === 401 ? 401 : 403,
-      body: {
-        success: false,
-        code: "AUTH_INVALID",
-        error: "Invalid authentication",
-        zh: "登录已失效，请重新登录",
-      },
-    }
-  }
-
-  const json = (await response.json().catch(() => null)) as { membership?: MembershipRecord | null } | null
-  const membership = json?.membership ?? null
-
-  if (!isMembershipActive(membership)) {
-    return {
-      ok: false as const,
-      status: 403,
-      body: {
-        success: false,
-        code: "MEMBERSHIP_REQUIRED",
-        error: "Active membership required",
-        zh: "需要开通会员才能使用 AI 生图功能",
-      },
-    }
-  }
-
-  return { ok: true as const }
-}
-
-// 样式配置
-const styleConfigs: Record<string, {
-  negativePrompt: string
-  steps: number
-  cfg: number
-  samplerName: string
-  scheduler: string
-}> = {
-  realistic: {
-    negativePrompt: "bad hands, low quality, blurry, ugly, deformed",
-    steps: 25,
-    cfg: 7.5,
-    samplerName: "dpmpp_2m",
-    scheduler: "karras"
-  },
-  cartoon: {
-    negativePrompt: "realistic, photo, bad hands, low quality",
-    steps: 20,
-    cfg: 8.0,
-    samplerName: "euler",
-    scheduler: "normal"
-  },
-  anime: {
-    negativePrompt: "realistic, photo, western, bad hands, low quality",
-    steps: 20,
-    cfg: 7.0,
-    samplerName: "dpmpp_2m",
-    scheduler: "karras"
-  },
-  abstract: {
-    negativePrompt: "realistic, photo, figurative, bad quality",
-    steps: 30,
-    cfg: 9.0,
-    samplerName: "euler_ancestral",
-    scheduler: "normal"
-  },
-  minimalist: {
-    negativePrompt: "complex, detailed, cluttered, busy, bad quality",
-    steps: 15,
-    cfg: 6.0,
-    samplerName: "euler",
-    scheduler: "normal"
-  },
-  vintage: {
-    negativePrompt: "modern, futuristic, bad hands, low quality",
-    steps: 25,
-    cfg: 8.5,
-    samplerName: "dpmpp_2m",
-    scheduler: "karras"
-  }
-}
-
-async function generateWithComfyUI(prompt: string, style: string): Promise<string> {
-  // 环境检测和服务器配置
-  const isProduction = process.env.NODE_ENV === 'production'
-  // 支持多个服务器地址，用逗号分隔
-  const comfyUIUrl = process.env.COMFYUI_URL || "http://82.157.19.21:8188,http://127.0.0.1:8188"
-  
-  console.log(`环境: ${isProduction ? '生产环境' : '开发环境'}`)
-  console.log(`ComfyUI 配置: ${comfyUIUrl}`)
-  console.log(`将按优先级自动尝试所有配置的服务器`)
-  
-  const client = new SimpleComfyUIClient(comfyUIUrl)
-
-  // 检查连接（会自动尝试多个地址）
-  try {
-    const isConnected = await client.checkConnection()
-    if (!isConnected) {
-      throw new Error(`无法连接到任何 ComfyUI 服务器（已尝试外网和内网地址）`)
-    }
-    const activeServer = client.getActiveServerUrl()
-    console.log(`✓ 成功连接到 ComfyUI 服务器: ${activeServer}`)
-  } catch (error) {
-    const errorMessage = error instanceof Error ? error.message : "未知连接错误"
-    console.error(`✗ ComfyUI 连接失败: ${errorMessage}`)
-    throw error
-  }
-
-  // 构建提示词（根据风格调整）
-  let enhancedPrompt = prompt
-  if (style === "photorealistic") {
-    enhancedPrompt = `${prompt}, photorealistic, high quality, professional photography`
-  } else if (style === "artistic") {
-    enhancedPrompt = `${prompt}, artistic, creative, stylized illustration`
-  } else if (style === "minimalist") {
-    enhancedPrompt = `${prompt}, minimalist, clean, simple design`
-  }
-
-  // 使用简化的 generateImage 方法
-  const result = await client.generateImage(
-    enhancedPrompt,
-    "bad hands, low quality, blurry, distorted",
-    {
-      width: 512,
-      height: 512,
-      steps: 20,
-      cfg: 7,
-      // Allow overriding model via env var; default to a safetensors checkpoint.
-      // This avoids failures like: "Could not detect model type" for some .ckpt files.
-      modelName: process.env.COMFYUI_MODEL_NAME || "dreamshaper_8.safetensors"
-    }
-  )
-
-  // 将 ArrayBuffer 转换为 Base64 URL
-  const imageBuffer = result.imageBuffer
-  const base64 = Buffer.from(imageBuffer).toString('base64')
-  const dataUrl = `data:image/png;base64,${base64}`
-
-  return dataUrl
-}
-
 export async function POST(request: NextRequest) {
   try {
-    // Membership gate: ComfyUI generation requires an active membership.
-    const gate = await requireActiveMembership(request)
-    if (!gate.ok) {
-      return NextResponse.json(gate.body, { status: gate.status })
-    }
-
     const { prompt, style = "realistic", width = 512, height = 512 } = await request.json()
 
     if (!prompt) {
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 })
     }
 
-    console.log(`正在生成图像，提示词: "${prompt}", 风格: "${style}"`)
+    const baseUrl = await getBackendBaseUrl()
+    const authHeader = request.headers.get("authorization") || ""
+    const response = await fetch(new URL("/api/jobs", baseUrl).toString(), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(authHeader ? { Authorization: authHeader } : {}),
+      },
+      body: JSON.stringify({
+        type: "ai-image",
+        payload: { prompt, style, width, height },
+      }),
+      signal: AbortSignal.timeout(10000),
+    })
 
-    let imageUrl: string
-
-    try {
-      imageUrl = await generateWithComfyUI(prompt, style)
-      
-      return NextResponse.json({
-        success: true,
-        imageUrl,
-        prompt,
-        style,
-        isPlaceholder: false
-      })
-      
-    } catch (error) {
-      console.warn("ComfyUI 生成失败，使用占位符:", error)
-      
-      // 提供更详细的错误信息
-      let errorMessage = "未知错误"
-      if (error instanceof Error) {
-        errorMessage = error.message
-      }
-      
-      // 回退到占位符图像
-      const fallbackUrl = `/placeholder.svg?height=${height}&width=${width}&query=${encodeURIComponent(prompt)}`
-      
-      return NextResponse.json({
-        success: true,
-        imageUrl: fallbackUrl,
-        prompt: `${prompt} (占位符)`,
-        isPlaceholder: true,
-        error: errorMessage
-      })
-    }
-
+    const data = await response.json().catch(() => null)
+    return NextResponse.json(data || { error: "Backend unavailable" }, { status: response.status })
   } catch (error) {
     console.error("AI generation error:", error)
     return NextResponse.json(
-      { 
+      {
         error: "生成图像失败",
-        details: error instanceof Error ? error.message : "未知错误"
-      }, 
+        details: error instanceof Error ? error.message : "未知错误",
+      },
       { status: 500 }
     )
-  }
-}
-
-// 添加健康检查端点
-export async function GET() {
-  try {
-    const isProduction = process.env.NODE_ENV === 'production'
-  const comfyUIUrl = process.env.COMFYUI_URL || "http://82.157.19.21:8188,http://127.0.0.1:8188"
-    const client = new SimpleComfyUIClient(comfyUIUrl)
-    
-    console.log(`健康检查 - 环境: ${isProduction ? '生产' : '开发'}`)
-    
-    const isAvailable = await client.checkConnection()
-    const activeServer = client.getActiveServerUrl()
-    const configuredServers = comfyUIUrl.split(',').map(s => s.trim())
-
-    return NextResponse.json({
-      status: "ok",
-      environment: isProduction ? 'production' : 'development',
-      comfyUIAvailable: isAvailable,
-      configuredServers: configuredServers,
-      activeServer: activeServer || '无可用服务器',
-      message: isAvailable 
-        ? `ComfyUI 连接正常 (使用: ${activeServer})` 
-        : "所有配置的 ComfyUI 服务器均不可用"
-    })
-  } catch (error) {
-    return NextResponse.json({
-      status: "error",
-      environment: process.env.NODE_ENV === 'production' ? 'production' : 'development',
-      comfyUIAvailable: false,
-      error: error instanceof Error ? error.message : "未知错误",
-      message: "ComfyUI 连接检查失败"
-    })
   }
 }

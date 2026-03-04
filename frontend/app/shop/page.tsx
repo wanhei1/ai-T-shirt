@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useLanguage } from "@/contexts/language-context";
 import apiClient from "@/lib/api-client";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { getCached, invalidateCached, setCachedForever } from "@/lib/client-cache";
 
 type ShopCategory = "all" | "realistic" | "cartoon" | "abstract" | "anime" | "minimalist" | "vintage";
@@ -43,11 +45,25 @@ export default function ShopPage() {
   const [category, setCategory] = useState<ShopCategory>("all");
   const [sort, setSort] = useState<ShopSort>("sales");
   const [refreshNonce, setRefreshNonce] = useState(0);
+  const [search, setSearch] = useState("");
+  const [appliedSearch, setAppliedSearch] = useState("");
+
+  const normalizedSearch = useMemo(() => search.trim(), [search]);
+  const normalizedAppliedSearch = useMemo(() => appliedSearch.trim(), [appliedSearch]);
+  const hasSearch = normalizedAppliedSearch.length > 0;
+
+  useEffect(() => {
+    if (normalizedSearch === normalizedAppliedSearch) return;
+    const timer = window.setTimeout(() => {
+      setAppliedSearch(normalizedSearch);
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [normalizedSearch, normalizedAppliedSearch]);
 
   useEffect(() => {
     let isMounted = true;
 
-    const cacheKey = `shop:gallery:v2:${category}:${sort}`;
+    const cacheKey = `shop:gallery:v2:${category}:${sort}:${normalizedAppliedSearch}`;
     const cached = getCached<GalleryDesign[]>(cacheKey);
     if (cached) {
       setDesigns(cached);
@@ -62,6 +78,7 @@ export default function ShopPage() {
           offset: 0,
           category: category === "all" ? undefined : category,
           sort,
+          search: normalizedAppliedSearch ? normalizedAppliedSearch : undefined,
         });
         const next = (response.designs || []) as GalleryDesign[];
         setCachedForever(cacheKey, next);
@@ -77,7 +94,7 @@ export default function ShopPage() {
     return () => {
       isMounted = false;
     };
-  }, [category, sort, refreshNonce]);
+  }, [category, sort, refreshNonce, normalizedAppliedSearch]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -118,6 +135,59 @@ export default function ShopPage() {
           </Button>
         </div>
 
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <div className="flex w-full max-w-md items-center gap-2">
+            <Input
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  setAppliedSearch(normalizedSearch);
+                }
+              }}
+              placeholder={translate({ zh: "搜索作品/作者/提示词", en: "Search designs, creators, prompts" })}
+            />
+            <Button
+              variant="outline"
+              className="bg-transparent"
+              onClick={() => setAppliedSearch(normalizedSearch)}
+            >
+              {translate({ zh: "搜索", en: "Search" })}
+            </Button>
+            {(search.length > 0 || hasSearch) && (
+              <Button
+                variant="ghost"
+                className="text-muted-foreground"
+                onClick={() => {
+                  setSearch("");
+                  setAppliedSearch("");
+                }}
+              >
+                {translate({ zh: "清除", en: "Clear" })}
+              </Button>
+            )}
+          </div>
+        </div>
+
+        <div className="mb-6 flex flex-wrap items-center gap-2">
+          <Badge variant="outline">
+            {translate({ zh: "排序", en: "Sort" })}: {sort === "sales" ? translate({ zh: "销量", en: "Sales" }) : translate({ zh: "最新", en: "Newest" })}
+          </Badge>
+          {category !== "all" && (
+            <Badge variant="outline">
+              {translate({ zh: "分类", en: "Category" })}: {translate(categoryLabels[category])}
+            </Badge>
+          )}
+          {hasSearch && (
+            <Badge variant="outline">
+              {translate({ zh: "搜索", en: "Search" })}: {normalizedAppliedSearch}
+            </Badge>
+          )}
+          <div className="ml-auto text-sm text-muted-foreground">
+            {translate({ zh: "结果", en: "Results" })}: {designs ? designs.length : "—"}
+          </div>
+        </div>
+
         <div className="mb-6 flex flex-wrap items-center gap-2">
           <Button
             variant={category === "all" ? "default" : "outline"}
@@ -142,7 +212,7 @@ export default function ShopPage() {
             variant="outline"
             className="bg-transparent"
             onClick={() => {
-              const cacheKey = `shop:gallery:v2:${category}:${sort}`;
+              const cacheKey = `shop:gallery:v2:${category}:${sort}:${normalizedAppliedSearch}`;
               invalidateCached(cacheKey);
               setDesigns(null);
               setRefreshNonce((n) => n + 1);
@@ -161,7 +231,9 @@ export default function ShopPage() {
         ) : designs.length === 0 ? (
           <Card>
             <CardContent className="py-10 text-center text-muted-foreground">
-              {translate({ zh: "暂无作品", en: "No designs yet" })}
+              {hasSearch
+                ? translate({ zh: "未找到匹配结果", en: "No matching results" })
+                : translate({ zh: "暂无作品", en: "No designs yet" })}
             </CardContent>
           </Card>
         ) : (

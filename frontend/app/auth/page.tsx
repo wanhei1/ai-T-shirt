@@ -15,7 +15,11 @@ export default function AuthPage() {
 
   useEffect(() => {
     if (user) {
-      router.push("/");
+      if ((user as any)?.is_admin) {
+        router.push("/admin");
+      } else {
+        router.push("/");
+      }
     }
   }, [user, router]);
 

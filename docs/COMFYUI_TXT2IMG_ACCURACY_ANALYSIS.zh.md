@@ -115,7 +115,7 @@ SD1.x 的 tokenizer 在：
 
 ### 3.2 中文语义在 CLIP embedding 上不稳定
 
-CLIP 的训练方式是“用互联网上的图文对”做对比学习（OpenAI 的 CLIP 介绍也强调它学习的是图文配对语义，并且对 wording/phrasing 敏感）。
+CLIP 的训练方式是“用互联网上的图文对”做对比学习（OpenAI 的 CLIP 介绍也强调它学习的是图文配对语义，并且对 wording/phrasing 敏  吧f感）。
 
 - OpenAI CLIP 页面 Limitations 里提到：
   - **CLIP’s zero-shot classifiers can be sensitive to wording or phrasing**

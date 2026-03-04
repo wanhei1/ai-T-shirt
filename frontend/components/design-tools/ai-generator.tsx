@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Textarea } from "@/components/ui/textarea"
@@ -11,9 +11,9 @@ import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Sparkles, Loader2, Download, Palette } from "lucide-react"
-import { ComfyUIStatusCard } from "@/components/comfyui-status-card"
 import Link from "next/link"
 import { useLanguage, type LanguageText } from "@/contexts/language-context"
+import apiClient from "@/lib/api-client"
 
 interface AIGeneratorProps {
   onImageGenerated: (imageUrl: string) => void
@@ -45,10 +45,10 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
   const [style, setStyle] = useState("realistic")
   const [isGenerating, setIsGenerating] = useState(false)
   const [generationProgress, setGenerationProgress] = useState("")
+  const [queueHint, setQueueHint] = useState<string | null>(null)
   const [generationPercent, setGenerationPercent] = useState(0)
   const [error, setError] = useState<string | null>(null)
   const [errorAction, setErrorAction] = useState<null | "login" | "membership">(null)
-  const progressTimerRef = useRef<number | null>(null)
   const [generatedImages, setGeneratedImages] = useState<Array<{ 
     url: string
     prompt: string
@@ -57,117 +57,102 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
     timestamp: number
   }>>([])
 
+  const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
   const generateImage = async () => {
     if (!prompt.trim()) return
 
     setIsGenerating(true)
     setError(null)
-    setGenerationProgress("正在准备生成...")
+    setQueueHint(null)
+    setGenerationProgress("正在排队...")
     setGenerationPercent(5)
-
-    if (progressTimerRef.current) {
-      window.clearInterval(progressTimerRef.current)
-      progressTimerRef.current = null
-    }
-
-    // Simulated progress to provide a smooth percentage indicator.
-    progressTimerRef.current = window.setInterval(() => {
-      setGenerationPercent((prev) => {
-        if (prev >= 90) return prev
-        const next = prev + Math.max(1, Math.round(Math.random() * 6))
-        return Math.min(90, next)
-      })
-    }, 400)
     
     try {
-      setGenerationProgress("正在发送请求到服务器...")
-      setGenerationPercent((p) => Math.max(p, 15))
+      setGenerationProgress("正在提交任务...")
 
-      const token =
-        (typeof window !== "undefined" &&
-          (localStorage.getItem("authToken") || localStorage.getItem("token"))) ||
-        null
-      
-      const response = await fetch("/api/generate-image", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ prompt, style }),
+      const jobResp = await apiClient.createJob({
+        type: "ai-image",
+        payload: { prompt, style },
       })
 
-      setGenerationProgress("正在处理响应...")
-      setGenerationPercent((p) => Math.max(p, 60))
+      const queue = jobResp.queue
+      const jobId = jobResp.jobId
+      const waiting = jobResp.queueStats?.waiting ?? 0
+      const active = jobResp.queueStats?.active ?? 0
+      setQueueHint(
+        translate({
+          zh: `队列中等待 ${waiting} 个，处理中 ${active} 个`,
+          en: `Queue waiting: ${waiting}, active: ${active}`,
+        })
+      )
 
-      if (!response.ok) {
-        const body = await response.json().catch(() => null)
+      setGenerationProgress("任务已入队，等待执行...")
 
-        if (response.status === 401) {
-          setErrorAction("login")
-          throw new Error(body?.zh || body?.error || "请先登录后再使用 AI 生图")
+      while (true) {
+        const status = await apiClient.getJobStatus(queue, jobId)
+        const job = status.job
+        const state = job?.state
+        const progress = typeof job?.progress === "number" ? job.progress : 0
+
+        if (progress > 0) {
+          setGenerationPercent(Math.min(100, Math.max(progress, 5)))
         }
 
-        if (response.status === 403) {
-          if (body?.code === "MEMBERSHIP_REQUIRED") {
-            setErrorAction("membership")
+        if (state === "completed") {
+          const imageUrl = job?.result?.imageUrl
+          if (!imageUrl) {
+            throw new Error("生成结果为空")
           }
-          throw new Error(body?.zh || body?.error || "需要会员才能使用 AI 生图")
-        }
 
-        throw new Error(
-          body?.error || body?.details || `服务器错误: ${response.status} ${response.statusText}`
-        )
-      }
+          setErrorAction(null)
+          setGenerationProgress("生成完成！")
+          setGenerationPercent(100)
 
-      const data = await response.json()
-
-      if (data.success) {
-        setErrorAction(null)
-        setGenerationProgress("生成完成！")
-        setGenerationPercent(100)
-        
-        const newImage = { 
-          url: data.imageUrl, 
-          prompt: data.prompt, 
-          style,
-          isPlaceholder: data.isPlaceholder,
-          timestamp: Date.now()
-        }
-
-        // Persist the last selected generation style as a shop/gallery category.
-        // This allows checkout to publish to the correct category (e.g. anime/漫画).
-        if (typeof window !== "undefined") {
-          try {
-            window.localStorage.setItem("designCategory", style)
-          } catch {
-            // ignore storage failures
+          const newImage = {
+            url: imageUrl,
+            prompt,
+            style,
+            timestamp: Date.now(),
           }
+
+          if (typeof window !== "undefined") {
+            try {
+              window.localStorage.setItem("designCategory", style)
+            } catch {
+              // ignore storage failures
+            }
+          }
+
+          setGeneratedImages((prev) => [newImage, ...prev])
+          setPrompt("")
+          setQueueHint(null)
+          break
         }
 
-        setGeneratedImages((prev) => [newImage, ...prev])
-        setPrompt("")
-        
-        // 如果是占位符，显示警告
-        if (data.isPlaceholder) {
-          setError(`ComfyUI 不可用，显示占位符图像。错误: ${data.error || '未知错误'}`)
+        if (state === "failed") {
+          throw new Error(job?.failedReason || "生成失败")
         }
-      } else {
-        throw new Error(data.error || data.details || "生成失败")
+
+        setGenerationProgress(state === "active" ? "正在生成..." : "排队中...")
+        await delay(1500)
       }
     } catch (error) {
       console.error("Generation error:", error)
-      const errorMessage = error instanceof Error ? error.message : "未知错误"
+      const err = error as Error & { status?: number }
+      if (err?.status === 401) {
+        setErrorAction("login")
+      }
+      if (err?.status === 403) {
+        setErrorAction("membership")
+      }
+      const errorMessage = err instanceof Error ? err.message : "未知错误"
       setError(`生成失败: ${errorMessage}`)
       setGenerationProgress("")
       setGenerationPercent(0)
+      setQueueHint(null)
     } finally {
       setIsGenerating(false)
-
-      if (progressTimerRef.current) {
-        window.clearInterval(progressTimerRef.current)
-        progressTimerRef.current = null
-      }
 
       // 清除进度状态
       setTimeout(() => {
@@ -178,12 +163,7 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
   }
 
   useEffect(() => {
-    return () => {
-      if (progressTimerRef.current) {
-        window.clearInterval(progressTimerRef.current)
-        progressTimerRef.current = null
-      }
-    }
+    return () => {}
   }, [])
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -199,9 +179,6 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
 
   return (
     <div className="space-y-4">
-      {/* ComfyUI 状态卡片 */}
-      <ComfyUIStatusCard />
-      
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
@@ -312,6 +289,12 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
               </>
             )}
           </Button>
+
+          {isGenerating && queueHint ? (
+            <div className="text-xs text-muted-foreground bg-background/80 border border-border rounded px-2 py-1">
+              {queueHint}
+            </div>
+          ) : null}
 
           <div>
             <Label className="text-sm">{translate({ zh: "快速灵感：", en: "Quick Ideas:" })}</Label>

@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useAuth } from "@/contexts/auth-context";
 import { Button } from "@/components/ui/button";
-import { User, LogOut } from "lucide-react";
+import { LogOut, ShoppingCart, User } from "lucide-react";
 import { useLanguage } from "@/contexts/language-context";
 
 export function Navbar() {
@@ -47,6 +47,17 @@ export function Navbar() {
                 </span>
 
                 {/* 简化的链接按钮 */}
+                <Link href="/cart">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className="flex items-center gap-2"
+                  >
+                    <ShoppingCart className="h-4 w-4" />
+                    {translate({ zh: "购物车", en: "Cart" })}
+                  </Button>
+                </Link>
+
                 <Link href="/profile">
                   <Button
                     variant="ghost"

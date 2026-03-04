@@ -5,6 +5,7 @@ export interface User {
   username: string
   email: string
   created_at?: string
+  is_admin?: boolean
 }
 
 export interface AuthResponse {

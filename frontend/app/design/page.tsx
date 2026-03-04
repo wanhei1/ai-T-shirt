@@ -157,7 +157,7 @@ export default function DesignPage() {
                             ? translate(selectedStyleData.name)
                             : undefined
                         }
-                        className="w-full h-full object-contain"
+                        className="w-full h-full object-cover object-top"
                       />
                     </div>
                     <div className="text-center">

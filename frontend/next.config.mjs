@@ -5,9 +5,6 @@ const distDir = process.env.NEXT_DIST_DIR || `.next-${safeUser}`;
 
 const nextConfig = {
   distDir,
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
   typescript: {
     ignoreBuildErrors: true,
   },

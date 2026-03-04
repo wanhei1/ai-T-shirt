@@ -35,7 +35,7 @@ export class AuthController {
             res.status(201).json({
                 message: 'User created successfully',
                 token,
-                user: { id: user.id, username: user.username, email: user.email, invite_code }
+                user: { id: user.id, username: user.username, email: user.email, invite_code, is_admin: (user as any).is_admin ?? false }
             });
         } catch (error) {
             console.error('Registration error:', error);
@@ -71,7 +71,7 @@ export class AuthController {
             res.json({
                 message: 'Login successful',
                 token,
-                user: { id: user.id, username: user.username, email: user.email, invite_code }
+                user: { id: user.id, username: user.username, email: user.email, invite_code, is_admin: (user as any).is_admin ?? false }
             });
         } catch (error) {
             console.error('Login error:', error);

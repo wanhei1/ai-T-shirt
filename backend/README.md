@@ -42,6 +42,19 @@ backend-project
 3. Set up your `.env` file with the necessary environment variables.
 4. Run the application using `npm start`.
 
+## Queue Service (RabbitMQ)
+
+This backend uses RabbitMQ for async jobs (`ai-image` and `virtual-tryon`).
+
+Start RabbitMQ locally:
+
+```bash
+cd backend
+docker compose up -d
+```
+
+Management UI: `http://localhost:15672` (default `xxyopen` / `test123456`)
+
 ## Contributing
 
 Contributions are welcome! Please open an issue or submit a pull request for any enhancements or bug fixes.

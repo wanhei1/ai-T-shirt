@@ -101,6 +101,17 @@ class ApiClient {
         if (typeof window !== "undefined" && response.status === 401) {
           localStorage.removeItem('authToken')
           localStorage.removeItem('token')
+          localStorage.removeItem('user')
+
+          // Centralize 401 handling to keep UX consistent.
+          if (window.location.pathname !== '/auth') {
+            window.location.assign('/auth')
+          }
+        }
+
+        const method = (options.method || 'GET').toUpperCase()
+        if (response.status === 401 && method === 'GET') {
+          return Promise.resolve(null as T)
         }
 
         throw err
@@ -177,7 +188,7 @@ class ApiClient {
   }
 
   // Orders
-  async createOrder(orderPayload: { total: number; items: any[]; selections?: any; design?: any; shipping_info?: any; canvas?: any; publishToAll?: boolean; sourceAllId?: number | null; category?: string | null }) {
+  async createOrder(orderPayload: { total: number; items: any[]; selections?: any; design?: any; shipping_info?: any; address?: string | null; canvas?: any; publishToAll?: boolean; sourceAllId?: number | null; category?: string | null }) {
     return this.request('/api/orders', {
       method: 'POST',
       body: JSON.stringify(orderPayload),
@@ -190,8 +201,79 @@ class ApiClient {
     });
   }
 
+  // Cart
+  async getCart() {
+    return this.request<{ items: any[] }>('/api/cart', {
+      method: 'GET',
+    });
+  }
+
+  async addCartItem(payload: {
+    items: any[];
+    selections?: any;
+    design?: any;
+    quantity?: number;
+    price?: number;
+    category?: string | null;
+    canvas?: any;
+    sourceAllId?: number | null;
+    publishToAll?: boolean;
+  }) {
+    return this.request<{ item: any }>('/api/cart', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateCartItem(cartItemId: number, payload: { quantity?: number; publishToAll?: boolean }) {
+    return this.request<{ item: any }>(`/api/cart/${cartItemId}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async removeCartItem(cartItemId: number) {
+    return this.request<{ success: boolean }>(`/api/cart/${cartItemId}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async clearCart() {
+    return this.request<{ success: boolean }>(`/api/cart/clear`, {
+      method: 'POST',
+    });
+  }
+
+  async checkoutCart(payload: { address: string; phone?: string }) {
+    return this.request<{ orders: any[]; membership?: any }>(`/api/cart/checkout`, {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  // Admin Orders
+  async getAdminOrders() {
+    return this.request<{ orders: any[] }>('/api/admin/orders', {
+      method: 'GET',
+    });
+  }
+
+  async updateAdminCredentials(payload: { email?: string; password?: string }) {
+    return this.request<{ message: string; user: any }>('/api/admin/credentials', {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateAdminOrderStatus(orderId: number, status: string) {
+    return this.request<{ order: { id: number; status: string } }>(`/api/admin/orders/${orderId}/status`, {
+      method: 'PUT',
+      body: JSON.stringify({ status }),
+    });
+  }
+
   // Public Gallery
-  async getGallery(params?: { limit?: number; offset?: number; category?: string; sort?: 'new' | 'sales' }) {
+  async getGallery(params?: { limit?: number; offset?: number; category?: string; sort?: 'new' | 'sales'; search?: string }) {
     const searchParams = new URLSearchParams();
     if (typeof params?.limit === 'number') searchParams.set('limit', String(params.limit));
     if (typeof params?.offset === 'number') searchParams.set('offset', String(params.offset));
@@ -199,6 +281,9 @@ class ApiClient {
       searchParams.set('category', params.category.trim());
     }
     if (params?.sort === 'sales' || params?.sort === 'new') searchParams.set('sort', params.sort);
+    if (typeof params?.search === 'string' && params.search.trim().length > 0) {
+      searchParams.set('search', params.search.trim());
+    }
 
     const query = searchParams.toString();
     const endpoint = query ? `/api/gallery?${query}` : '/api/gallery';
@@ -240,6 +325,31 @@ class ApiClient {
 
   async getMembershipTransactions(limit = 50) {
     return this.request<{ transactions: any[] }>(`/api/memberships/transactions/me?limit=${limit}`, {
+      method: "GET",
+    });
+  }
+
+  // Jobs
+  async createJob(payload: { type: "ai-image" | "virtual-tryon"; payload: any }) {
+    return this.request<{
+      jobId: string | number;
+      queue: string;
+      queueStats?: {
+        waiting?: number;
+        active?: number;
+        completed?: number;
+        failed?: number;
+        delayed?: number;
+        paused?: number;
+      };
+    }>("/api/jobs", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getJobStatus(queue: string, jobId: string | number) {
+    return this.request<{ job: any }>(`/api/jobs/${queue}/${jobId}`, {
       method: "GET",
     });
   }

@@ -30,3 +30,19 @@ export const authenticate = (req: Request, res: Response, next: NextFunction) =>
         next();
     });
 };
+
+export const authenticateOptional = (req: Request, _res: Response, next: NextFunction) => {
+    const token = req.headers['authorization']?.split(' ')[1];
+
+    if (!token) {
+        return next();
+    }
+
+    jwt.verify(token, secretKey, (err, decoded) => {
+        if (!err && decoded) {
+            const payload = decoded as any;
+            req.userId = typeof payload.id === 'string' ? parseInt(payload.id, 10) : payload.id;
+        }
+        next();
+    });
+};

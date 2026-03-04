@@ -42,8 +42,9 @@ type OrderRecord = {
 };
 
 export default function HomePage() {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   const { translate } = useLanguage();
+  const [isHydrated, setIsHydrated] = useState(false);
   const [membership, setMembership] = useState<MembershipRecord | null>(null);
   const [isLoadingMembership, setIsLoadingMembership] = useState(false);
 
@@ -52,6 +53,10 @@ export default function HomePage() {
   const [activeOrder, setActiveOrder] = useState<OrderRecord | null>(null);
   const sliderRef = useRef<HTMLDivElement>(null);
   const marqueeRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    setIsHydrated(true);
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -105,7 +110,13 @@ export default function HomePage() {
           setMyOrders((response.orders || []) as OrderRecord[]);
         }
       } catch (error) {
-        if (isMounted) {
+        if (!isMounted) return;
+
+        const status = (error as { status?: number })?.status;
+        if (status === 401) {
+          logout();
+          setMyOrders(null);
+        } else {
           console.warn("Failed to fetch orders", error);
           setMyOrders([]);
         }
@@ -120,7 +131,7 @@ export default function HomePage() {
     return () => {
       isMounted = false;
     };
-  }, [user]);
+  }, [user, logout]);
 
   // Auto-scrolling marquee ticker; duplicates items and uses CSS animation for smoother loop
   const marqueeDuration = useMemo(() => {
@@ -155,6 +166,10 @@ export default function HomePage() {
     // Triple duplication plus translateX(-33.333%) yields a seamless marquee without a jump
     return [...myOrders, ...myOrders, ...myOrders];
   }, [myOrders]);
+
+  const showcaseCount = myOrders?.length ?? 0;
+  const useMarquee = showcaseCount >= 6;
+  const showComingSoon = showcaseCount > 0 && showcaseCount < 5;
 
   const featureCards = [
     {
@@ -222,26 +237,39 @@ export default function HomePage() {
     },
   ];
 
+  const BASE_MONTHLY_AMOUNT = 198;
+  const DISCOUNT_RATE = 0.85;
+  const formatPrice = (amount: number) => `¥${amount.toFixed(2)}`;
+
   const membershipPlans = [
     {
       id: "monthly",
       title: translate({ zh: "月度会员", en: "Monthly" }),
-      price: translate({ zh: "¥188 / 月", en: "¥188 / month" }),
+      price: translate({ zh: `${formatPrice(BASE_MONTHLY_AMOUNT)} / 月`, en: `${formatPrice(BASE_MONTHLY_AMOUNT)} / month` }),
     },
     {
       id: "quarterly",
       title: translate({ zh: "季度会员", en: "Quarterly" }),
-      price: translate({ zh: "¥564 / 季", en: "¥564 / quarter" }),
+      price: translate({
+        zh: `${formatPrice(BASE_MONTHLY_AMOUNT * 3 * DISCOUNT_RATE)} / 季`,
+        en: `${formatPrice(BASE_MONTHLY_AMOUNT * 3 * DISCOUNT_RATE)} / quarter`,
+      }),
     },
     {
       id: "half-year",
       title: translate({ zh: "半年会员", en: "Half-Year" }),
-      price: translate({ zh: "¥1128 / 半年", en: "¥1128 / half-year" }),
+      price: translate({
+        zh: `${formatPrice(BASE_MONTHLY_AMOUNT * 6 * DISCOUNT_RATE)} / 半年`,
+        en: `${formatPrice(BASE_MONTHLY_AMOUNT * 6 * DISCOUNT_RATE)} / half-year`,
+      }),
     },
     {
       id: "yearly",
       title: translate({ zh: "年度会员", en: "Annual" }),
-      price: translate({ zh: "¥2256 / 年", en: "¥2256 / year" }),
+      price: translate({
+        zh: `${formatPrice(BASE_MONTHLY_AMOUNT * 12 * DISCOUNT_RATE)} / 年`,
+        en: `${formatPrice(BASE_MONTHLY_AMOUNT * 12 * DISCOUNT_RATE)} / year`,
+      }),
     },
   ];
 
@@ -276,7 +304,7 @@ export default function HomePage() {
             })}
           </p>
 
-          {user ? (
+          {isHydrated && user ? (
             <div className="space-y-6">
               <div className="flex flex-col sm:flex-row gap-4 justify-center">
                 <Button size="lg" asChild className="text-lg px-8">
@@ -357,7 +385,9 @@ export default function HomePage() {
                 {translate({ zh: "商城展示区", en: "Shop Showcase" })}
               </h2>
               <p className="text-muted-foreground">
-                {translate({ zh: "展示已下单的正面画布，自动横向滑动", en: "Auto-scrolling row of your ordered front canvases" })}
+                {useMarquee
+                  ? translate({ zh: "展示已下单的正面画布，自动横向滑动", en: "Auto-scrolling row of your ordered front canvases" })
+                  : translate({ zh: "展示已下单的正面画布", en: "Showcase of your ordered front canvases" })}
               </p>
             </div>
             <div className="flex gap-3">
@@ -367,7 +397,13 @@ export default function HomePage() {
             </div>
           </div>
 
-          {!user ? (
+          {!isHydrated ? (
+            <Card>
+              <CardContent className="py-10 text-center text-muted-foreground">
+                {translate({ zh: "加载中...", en: "Loading..." })}
+              </CardContent>
+            </Card>
+          ) : !user ? (
             <Card>
               <CardContent className="py-10 text-center text-muted-foreground">
                 {translate({ zh: "登录后可查看你的设计滑动展示", en: "Log in to see your auto-scrolling designs" })}
@@ -387,57 +423,104 @@ export default function HomePage() {
             </Card>
           ) : (
             <div className="relative overflow-hidden pb-3">
-              <div
-                ref={marqueeRef}
-                className="flex gap-4 min-w-max animate-[marquee-slide_var(--marquee-duration)_linear_infinite] will-change-transform"
-                style={{
-                  // @ts-ignore custom properties for animation timing
-                  "--marquee-duration": `${marqueeDuration}s`,
-                  "--marquee-shift": "-33.333333%",
-                }}
-              >
-                {loopOrders.map((order, idx) => {
-                  const preview = getOrderPreviews(order);
-                  return (
-                    <Card
-                      key={`${order.id}-${idx}`}
-                      className="min-w-[240px] max-w-[240px] snap-start cursor-pointer hover:shadow-lg transition-shadow"
-                      onClick={() => setActiveOrder(order)}
-                    >
-                      <CardHeader>
-                        <CardTitle className="text-base">
-                          {translate({ zh: "我的设计", en: "My Design" })}
-                        </CardTitle>
-                        <CardDescription>
-                          {new Date(order.created_at).toLocaleString(translate({ zh: "zh-CN", en: "en-US" }))}
-                        </CardDescription>
-                      </CardHeader>
-                      <CardContent className="space-y-3">
-                        {preview.front ? (
-                          <img
-                            src={preview.front}
-                            alt={`order-${order.id}-front`}
-                            className="h-40 w-full rounded-md object-cover"
-                          />
-                        ) : (
-                          <div className="h-40 w-full rounded-md bg-muted flex items-center justify-center text-sm text-muted-foreground">
-                            {translate({ zh: "无预览图", en: "No preview" })}
+              {showComingSoon ? (
+                <div className="mb-3 text-sm text-muted-foreground">
+                  {translate({ zh: "更多款式即将展示", en: "More styles coming soon" })}
+                </div>
+              ) : null}
+              {useMarquee ? (
+                <div
+                  ref={marqueeRef}
+                  className="flex gap-4 min-w-max animate-[marquee-slide_var(--marquee-duration)_linear_infinite] will-change-transform"
+                  style={{
+                    // @ts-ignore custom properties for animation timing
+                    "--marquee-duration": `${marqueeDuration}s`,
+                    "--marquee-shift": "-33.333333%",
+                  }}
+                >
+                  {loopOrders.map((order, idx) => {
+                    const preview = getOrderPreviews(order);
+                    return (
+                      <Card
+                        key={`${order.id}-${idx}`}
+                        className="min-w-[240px] max-w-[240px] snap-start cursor-pointer hover:shadow-lg transition-shadow"
+                        onClick={() => setActiveOrder(order)}
+                      >
+                        <CardHeader>
+                          <CardTitle className="text-base">
+                            {translate({ zh: "我的设计", en: "My Design" })}
+                          </CardTitle>
+                          <CardDescription>
+                            {new Date(order.created_at).toLocaleString(translate({ zh: "zh-CN", en: "en-US" }))}
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                          {preview.front ? (
+                            <img
+                              src={preview.front}
+                              alt={`order-${order.id}-front`}
+                              className="h-40 w-full rounded-md object-cover"
+                            />
+                          ) : (
+                            <div className="h-40 w-full rounded-md bg-muted flex items-center justify-center text-sm text-muted-foreground">
+                              {translate({ zh: "无预览图", en: "No preview" })}
+                            </div>
+                          )}
+                          <div className="text-xs text-muted-foreground">
+                            {translate({ zh: "点击查看正反面详情", en: "Click to view front/back" })}
                           </div>
-                        )}
-                        <div className="text-xs text-muted-foreground">
-                          {translate({ zh: "点击查看正反面详情", en: "Click to view front/back" })}
-                        </div>
-                      </CardContent>
-                    </Card>
-                  );
-                })}
-              </div>
-              <style jsx global>{`
-                @keyframes marquee-slide {
-                  0% { transform: translateX(0); }
-                  100% { transform: translateX(var(--marquee-shift)); }
-                }
-              `}</style>
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="flex flex-wrap gap-4">
+                  {(myOrders || []).map((order) => {
+                    const preview = getOrderPreviews(order);
+                    return (
+                      <Card
+                        key={String(order.id)}
+                        className="w-full sm:w-[240px] cursor-pointer hover:shadow-lg transition-shadow"
+                        onClick={() => setActiveOrder(order)}
+                      >
+                        <CardHeader>
+                          <CardTitle className="text-base">
+                            {translate({ zh: "我的设计", en: "My Design" })}
+                          </CardTitle>
+                          <CardDescription>
+                            {new Date(order.created_at).toLocaleString(translate({ zh: "zh-CN", en: "en-US" }))}
+                          </CardDescription>
+                        </CardHeader>
+                        <CardContent className="space-y-3">
+                          {preview.front ? (
+                            <img
+                              src={preview.front}
+                              alt={`order-${order.id}-front`}
+                              className="h-40 w-full rounded-md object-cover"
+                            />
+                          ) : (
+                            <div className="h-40 w-full rounded-md bg-muted flex items-center justify-center text-sm text-muted-foreground">
+                              {translate({ zh: "无预览图", en: "No preview" })}
+                            </div>
+                          )}
+                          <div className="text-xs text-muted-foreground">
+                            {translate({ zh: "点击查看正反面详情", en: "Click to view front/back" })}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+              )}
+              {useMarquee ? (
+                <style jsx global>{`
+                  @keyframes marquee-slide {
+                    0% { transform: translateX(0); }
+                    100% { transform: translateX(var(--marquee-shift)); }
+                  }
+                `}</style>
+              ) : null}
             </div>
           )}
         </div>
@@ -458,8 +541,8 @@ export default function HomePage() {
                 </h2>
                 <p className="text-lg text-muted-foreground mb-6">
                   {translate({
-                    zh: "188 元起，享受全时段 AI 生图、素材库等多项特权，为你的原创设计保驾护航。",
-                    en: "Starting at ¥188, enjoy unlimited AI generation, exclusive assets, and more perks to power your custom creations.",
+                    zh: "198 元起，享受全时段 AI 生图、素材库等多项特权，为你的原创设计保驾护航。",
+                    en: "Starting at ¥198, enjoy unlimited AI generation, exclusive assets, and more perks to power your custom creations.",
                   })}
                 </p>
                 <ul className="space-y-2 mb-6 text-muted-foreground">

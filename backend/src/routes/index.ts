@@ -1,12 +1,20 @@
 import { Router } from 'express';
 import { AuthController } from '../controllers';
-import { AIController } from '../controllers/aiController';
-import { UserModel, OrderModel, MembershipModel, AllDesignModel } from '../models';
-import { authenticate } from '../middleware/auth';
+import { UserModel, OrderModel, MembershipModel, AllDesignModel, CartModel } from '../models';
+import { authenticate, authenticateOptional } from '../middleware/auth';
 import { Pool } from 'pg';
 import { normalizeCategory } from '../utils/category';
 import { categoryAliases } from '../utils/category';
 import { randomUUID } from 'crypto';
+import { hashPassword } from '../utils';
+import {
+    enqueueJob,
+    getQueueByName,
+    AI_QUEUE_NAME,
+    TRYON_QUEUE_NAME,
+    getQueueStats as getQueueStatsByName,
+    getJobById,
+} from '../queue/queues';
 
 export const createRoutes = (pool: Pool | null) => {
     const router = Router();
@@ -24,16 +32,62 @@ export const createRoutes = (pool: Pool | null) => {
 
     const userModel = new UserModel(pool);
     const authController = new AuthController(userModel);
-    const aiController = new AIController();
     const orderModel = new OrderModel(pool);
     const allDesignModel = new AllDesignModel(pool);
     const membershipModel = new MembershipModel(pool);
+    const cartModel = new CartModel(pool);
 
+    const getQueueStats = async (queueName: string) => {
+        if (queueName !== AI_QUEUE_NAME && queueName !== TRYON_QUEUE_NAME) {
+            return {
+                waiting: 0,
+                active: 0,
+                completed: 0,
+                failed: 0,
+                delayed: 0,
+                paused: 0
+            };
+        }
+
+        return getQueueStatsByName(queueName);
+    };
+
+    const buildJobOptions = () => {
+        const attempts = Math.max(1, Number.parseInt(process.env.JOB_MAX_ATTEMPTS || '1', 10));
+        const backoffMs = Math.max(0, Number.parseInt(process.env.JOB_BACKOFF_MS || '5000', 10));
+        const removeOnComplete = Math.max(10, Number.parseInt(process.env.JOB_REMOVE_ON_COMPLETE || '100', 10));
+        const removeOnFail = Math.max(10, Number.parseInt(process.env.JOB_REMOVE_ON_FAIL || '200', 10));
+
+        return {
+            attempts,
+            backoff: attempts > 1 ? { type: 'fixed', delay: backoffMs } : undefined,
+            removeOnComplete,
+            removeOnFail
+        };
+    };
+
+    const requireAdmin = async (req: any, res: any) => {
+        if (!req.userId) {
+            res.status(401).json({ message: 'User ID not found' });
+            return null;
+        }
+
+        const user = await userModel.findUserById(req.userId);
+        if (!user || !(user as any).is_admin) {
+            res.status(403).json({ message: 'Admin access required' });
+            return null;
+        }
+
+        return user;
+    };
+
+    const baseMonthlyAmount = 198;
+    const discountRate = 0.85;
     const membershipPlans: Record<string, { amount: number; currency: string; durationDays: number }> = {
-        monthly: { amount: 188, currency: 'CNY', durationDays: 30 },
-        quarterly: { amount: 564, currency: 'CNY', durationDays: 90 },
-        'half-year': { amount: 1128, currency: 'CNY', durationDays: 180 },
-        yearly: { amount: 2256, currency: 'CNY', durationDays: 365 }
+        monthly: { amount: baseMonthlyAmount, currency: 'CNY', durationDays: 30 },
+        quarterly: { amount: Number((baseMonthlyAmount * 3 * discountRate).toFixed(2)), currency: 'CNY', durationDays: 90 },
+        'half-year': { amount: Number((baseMonthlyAmount * 6 * discountRate).toFixed(2)), currency: 'CNY', durationDays: 180 },
+        yearly: { amount: Number((baseMonthlyAmount * 12 * discountRate).toFixed(2)), currency: 'CNY', durationDays: 365 }
     };
 
     // 注册路由
@@ -50,7 +104,8 @@ export const createRoutes = (pool: Pool | null) => {
             const category = typeof req.query.category === 'string' ? req.query.category : undefined;
             const sortRaw = typeof req.query.sort === 'string' ? req.query.sort : undefined;
             const sort = sortRaw === 'sales' ? 'sales' : 'new';
-            const designs = await allDesignModel.list({ limit, offset, category, sort });
+            const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+            const designs = await allDesignModel.list({ limit, offset, category, sort, search });
             res.json({ designs });
         } catch (error) {
             console.error('Get gallery error:', error);
@@ -133,9 +188,168 @@ export const createRoutes = (pool: Pool | null) => {
                 });
             }
 
-            return aiController.generateDesign(req, res);
+            const { prompt, style, width, height } = req.body || {};
+            if (!prompt || typeof prompt !== 'string') {
+                return res.status(400).json({ message: 'Prompt is required' });
+            }
+
+            const job = await enqueueJob(
+                AI_QUEUE_NAME,
+                {
+                    userId: req.userId,
+                    prompt: prompt.trim(),
+                    style: typeof style === 'string' ? style : undefined,
+                    width: typeof width === 'number' ? width : undefined,
+                    height: typeof height === 'number' ? height : undefined
+                },
+                buildJobOptions()
+            );
+
+            return res.status(202).json({ jobId: job.id, queue: AI_QUEUE_NAME });
         } catch (error) {
             console.error('Membership gate error:', error);
+            return res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
+    router.post('/jobs', authenticateOptional, async (req, res) => {
+        try {
+            const { type, payload } = req.body || {};
+
+            if (type !== AI_QUEUE_NAME && type !== TRYON_QUEUE_NAME) {
+                return res.status(400).json({ message: 'Invalid job type' });
+            }
+
+            if (type === AI_QUEUE_NAME) {
+                if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
+
+                const membership = await membershipModel.getMembershipByUserId(req.userId);
+                const expiresAt = membership?.expires_at ? new Date(membership.expires_at) : null;
+                const isActive = Boolean(
+                    membership &&
+                    (!membership.status || membership.status === 'active') &&
+                    (!expiresAt || expiresAt.getTime() >= Date.now())
+                );
+
+                if (!isActive) {
+                    return res.status(403).json({
+                        message: 'Active membership required',
+                        code: 'MEMBERSHIP_REQUIRED'
+                    });
+                }
+
+                const prompt = typeof payload?.prompt === 'string' ? payload.prompt.trim() : '';
+                if (!prompt) {
+                    return res.status(400).json({ message: 'Prompt is required' });
+                }
+
+                const job = await enqueueJob(
+                    AI_QUEUE_NAME,
+                    {
+                        userId: req.userId,
+                        prompt,
+                        style: typeof payload?.style === 'string' ? payload.style : undefined,
+                        width: typeof payload?.width === 'number' ? payload.width : undefined,
+                        height: typeof payload?.height === 'number' ? payload.height : undefined
+                    },
+                    buildJobOptions()
+                );
+
+                return res.status(202).json({
+                    jobId: job.id,
+                    queue: AI_QUEUE_NAME,
+                    queueStats: await getQueueStats(AI_QUEUE_NAME)
+                });
+            }
+
+            const personDataUrl = typeof payload?.personDataUrl === 'string' ? payload.personDataUrl : '';
+            const clothDataUrl = typeof payload?.clothDataUrl === 'string' ? payload.clothDataUrl : '';
+            if (!personDataUrl || !clothDataUrl) {
+                return res.status(400).json({ message: 'Missing try-on inputs' });
+            }
+
+            const job = await enqueueJob(
+                TRYON_QUEUE_NAME,
+                {
+                    userId: req.userId,
+                    personDataUrl,
+                    clothDataUrl,
+                    clothType: typeof payload?.clothType === 'string' ? payload.clothType : undefined
+                },
+                buildJobOptions()
+            );
+
+            return res.status(202).json({
+                jobId: job.id,
+                queue: TRYON_QUEUE_NAME,
+                queueStats: await getQueueStats(TRYON_QUEUE_NAME)
+            });
+        } catch (error) {
+            console.error('Create job error:', error);
+            return res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
+    router.get('/jobs/:queue/stats', authenticateOptional, async (req, res) => {
+        try {
+            const queue = getQueueByName(req.params.queue);
+            if (!queue) {
+                return res.status(404).json({ message: 'Queue not found' });
+            }
+
+            return res.json({ queue: queue.name, stats: await getQueueStats(queue.name) });
+        } catch (error) {
+            console.error('Get queue stats error:', error);
+            return res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
+    router.get('/jobs/:queue/:id', authenticateOptional, async (req, res) => {
+        try {
+            const queue = getQueueByName(req.params.queue);
+            if (!queue) {
+                return res.status(404).json({ message: 'Queue not found' });
+            }
+
+            const queueName = queue.name;
+            if (queueName !== AI_QUEUE_NAME && queueName !== TRYON_QUEUE_NAME) {
+                return res.status(404).json({ message: 'Queue not found' });
+            }
+
+            const job = getJobById(queueName, req.params.id);
+            if (!job) {
+                return res.status(404).json({ message: 'Job not found' });
+            }
+
+            const ownerId = (job.data as any)?.userId as number | undefined;
+            if (ownerId) {
+                if (!req.userId) {
+                    return res.status(401).json({ message: 'User ID not found' });
+                }
+                if (req.userId !== ownerId) {
+                    const viewer = await userModel.findUserById(req.userId);
+                    if (!viewer || !(viewer as any).is_admin) {
+                        return res.status(403).json({ message: 'Forbidden' });
+                    }
+                }
+            }
+
+            return res.json({
+                job: {
+                    id: job.id,
+                    queue: queue.name,
+                    state: job.state,
+                    progress: job.progress ?? 0,
+                    result: job.result ?? null,
+                    failedReason: job.failedReason ?? null,
+                    attemptsMade: job.attemptsMade,
+                    createdAt: job.createdAt,
+                    finishedAt: job.finishedAt ?? null,
+                    logs: job.logs.slice(-50)
+                }
+            });
+        } catch (error) {
+            console.error('Get job error:', error);
             return res.status(500).json({ message: 'Internal server error' });
         }
     });
@@ -166,7 +380,8 @@ export const createRoutes = (pool: Pool | null) => {
                     invite_code: inviteCode,
                     invited_by_user_id: (user as any).invited_by_user_id ?? null,
                     invite_redeemed_at: (user as any).invite_redeemed_at ?? null,
-                    membership
+                    membership,
+                    is_admin: (user as any).is_admin ?? false
                 }
             });
         } catch (error) {
@@ -313,7 +528,7 @@ export const createRoutes = (pool: Pool | null) => {
         try {
             if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
 
-            const { total, items, selections, design, shipping_info, canvas, publishToAll = true, sourceAllId, category } = req.body || {};
+            const { total, items, selections, design, shipping_info, address: addressRaw, phone: phoneRaw, canvas, publishToAll = true, sourceAllId, category } = req.body || {};
             const totalNumber = typeof total === 'number' ? total : Number(total);
             if (!items || !Array.isArray(items) || !Number.isFinite(totalNumber)) {
                 return res.status(400).json({ message: 'Invalid order payload' });
@@ -379,11 +594,22 @@ export const createRoutes = (pool: Pool | null) => {
                 meta: canvas?.meta ?? design?.canvas ?? null
             };
 
+            const address =
+                (typeof addressRaw === 'string' && addressRaw.trim().length > 0 ? addressRaw.trim() : null) ||
+                (typeof shipping_info?.address === 'string' && shipping_info.address.trim().length > 0
+                    ? shipping_info.address.trim()
+                    : null);
+            const phone =
+                (typeof phoneRaw === 'string' && phoneRaw.trim().length > 0 ? phoneRaw.trim() : null) ||
+                (typeof shipping_info?.phone === 'string' && shipping_info.phone.trim().length > 0
+                    ? shipping_info.phone.trim()
+                    : null);
+
             const created = await client.query(
                 `
-                INSERT INTO orders (user_id, total, category, items, selections, design, shipping_info, canvas_front, canvas_back, canvas_meta, source_all_id)
-                VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10::jsonb, $11)
-                RETURNING id, user_id, total, category, status, items, selections, design, shipping_info, canvas_front, canvas_back, canvas_meta, source_all_id, created_at
+                INSERT INTO orders (user_id, total, category, items, selections, design, shipping_info, address, phone, order_time, canvas_front, canvas_back, canvas_meta, source_all_id)
+                VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, NOW(), $10, $11, $12::jsonb, $13)
+                RETURNING id, user_id, total, category, status, items, selections, design, shipping_info, address, phone, order_time, canvas_front, canvas_back, canvas_meta, source_all_id, created_at
                 `,
                 [
                     req.userId,
@@ -393,6 +619,8 @@ export const createRoutes = (pool: Pool | null) => {
                     JSON.stringify(selections || {}),
                     JSON.stringify(design || {}),
                     JSON.stringify(shipping_info || {}),
+                    address,
+                    phone,
                     canvasPayload.frontSnapshot ?? null,
                     canvasPayload.backSnapshot ?? null,
                     canvasPayload.meta ? JSON.stringify(canvasPayload.meta) : null,
@@ -486,6 +714,302 @@ export const createRoutes = (pool: Pool | null) => {
         }
     });
 
+    // 购物车：获取列表
+    router.get('/cart', authenticate, async (req, res) => {
+        try {
+            if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
+            const items = await cartModel.listCartItems(req.userId);
+            res.json({ items });
+        } catch (error) {
+            console.error('Get cart error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
+    // 购物车：添加
+    router.post('/cart', authenticate, async (req, res) => {
+        try {
+            if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
+
+            const { items, selections, design, quantity, price, category, canvas, sourceAllId, publishToAll } = req.body || {};
+            if (!items || !Array.isArray(items)) {
+                return res.status(400).json({ message: 'Invalid cart payload' });
+            }
+
+            const created = await cartModel.createCartItem({
+                userId: req.userId,
+                quantity: typeof quantity === 'number' ? quantity : 1,
+                price: typeof price === 'number' ? price : Number(price) || 0,
+                category: typeof category === 'string' ? category : null,
+                items,
+                selections,
+                design,
+                canvas,
+                sourceAllId: typeof sourceAllId === 'number' ? sourceAllId : null,
+                publishToAll: publishToAll !== false
+            });
+
+            res.status(201).json({ item: created });
+        } catch (error) {
+            console.error('Add cart error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
+    // 购物车：更新数量/发布
+    router.put('/cart/:id', authenticate, async (req, res) => {
+        try {
+            if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
+            const cartId = Number(req.params.id);
+            if (!Number.isFinite(cartId) || cartId <= 0) {
+                return res.status(400).json({ message: 'Invalid cart item id' });
+            }
+
+            const quantity = typeof req.body?.quantity === 'number' ? req.body.quantity : undefined;
+            const publishToAll = typeof req.body?.publishToAll === 'boolean' ? req.body.publishToAll : undefined;
+
+            const updated = await cartModel.updateCartItem(req.userId, cartId, { quantity, publishToAll });
+            if (!updated) {
+                return res.status(404).json({ message: 'Cart item not found' });
+            }
+
+            res.json({ item: updated });
+        } catch (error) {
+            console.error('Update cart error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
+    // 购物车：删除
+    router.delete('/cart/:id', authenticate, async (req, res) => {
+        try {
+            if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
+            const cartId = Number(req.params.id);
+            if (!Number.isFinite(cartId) || cartId <= 0) {
+                return res.status(400).json({ message: 'Invalid cart item id' });
+            }
+
+            const removed = await cartModel.removeCartItem(req.userId, cartId);
+            if (!removed) {
+                return res.status(404).json({ message: 'Cart item not found' });
+            }
+
+            res.json({ success: true });
+        } catch (error) {
+            console.error('Remove cart error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
+    // 购物车：清空
+    router.post('/cart/clear', authenticate, async (req, res) => {
+        try {
+            if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
+            await cartModel.clearCart(req.userId);
+            res.json({ success: true });
+        } catch (error) {
+            console.error('Clear cart error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
+    // 购物车：结算
+    router.post('/cart/checkout', authenticate, async (req, res) => {
+        const client = await pool.connect();
+        try {
+            if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
+
+            const addressRaw = typeof req.body?.address === 'string' ? req.body.address : '';
+            const phoneRaw = typeof req.body?.phone === 'string' ? req.body.phone : '';
+            const address = addressRaw.trim();
+            const phone = phoneRaw.trim();
+
+            if (!address) {
+                return res.status(400).json({ message: 'Shipping address is required' });
+            }
+
+            await client.query('BEGIN');
+
+            const cartItems = await cartModel.getCartItemsForUpdate(client, req.userId);
+            if (!cartItems.length) {
+                await client.query('ROLLBACK');
+                return res.status(400).json({ message: 'Cart is empty' });
+            }
+
+            const totalSum = cartItems.reduce((sum, item) => {
+                const qty = Math.max(1, Number(item.quantity) || 1);
+                const price = Number(item.price) || 0;
+                return sum + price * qty;
+            }, 0);
+
+            const membership = await membershipModel.getMembershipForUpdate(client, req.userId);
+            const expiresAt = membership?.expires_at ? new Date(membership.expires_at) : null;
+            const isActive = Boolean(
+                membership &&
+                (!membership.status || membership.status === 'active') &&
+                (!expiresAt || expiresAt.getTime() >= Date.now())
+            );
+
+            if (!isActive) {
+                await client.query('ROLLBACK');
+                return res.status(403).json({
+                    message: 'Active membership required to place orders',
+                    code: 'MEMBERSHIP_REQUIRED'
+                });
+            }
+
+            const currentBalance = Number(membership?.balance ?? 0);
+            if (!Number.isFinite(currentBalance) || currentBalance < totalSum) {
+                await client.query('ROLLBACK');
+                return res.status(402).json({
+                    message: 'Insufficient membership balance',
+                    code: 'INSUFFICIENT_BALANCE',
+                    balance: currentBalance,
+                    required: totalSum
+                });
+            }
+
+            const newBalance = Number((currentBalance - totalSum).toFixed(2));
+            const updatedMembership = await membershipModel.updateBalanceAndMaybeCancel(client, {
+                userId: req.userId,
+                newBalance,
+                cancelIfEmpty: true
+            });
+
+            const createdOrders: any[] = [];
+
+            for (const cartItem of cartItems) {
+                const qty = Math.max(1, Number(cartItem.quantity) || 1);
+                const price = Number(cartItem.price) || 0;
+                const orderTotal = Number((price * qty).toFixed(2));
+
+                const resolvedCategory =
+                    (typeof cartItem.category === 'string' && cartItem.category.trim().length > 0 ? cartItem.category.trim() : null) ||
+                    (typeof cartItem.design?.category === 'string' && cartItem.design.category.trim().length > 0 ? cartItem.design.category.trim() : null);
+
+                const normalizedCategory = normalizeCategory(resolvedCategory) ?? resolvedCategory;
+
+                const canvasPayload = {
+                    frontSnapshot: cartItem.canvas_front ?? null,
+                    backSnapshot: cartItem.canvas_back ?? null,
+                    meta: cartItem.canvas_meta ?? null
+                };
+
+                const selectionsWithQty = {
+                    ...(cartItem.selections || {}),
+                    quantity: qty
+                };
+
+                const created = await client.query(
+                    `
+                    INSERT INTO orders (user_id, total, category, items, selections, design, shipping_info, address, phone, order_time, canvas_front, canvas_back, canvas_meta, source_all_id)
+                    VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, NOW(), $10, $11, $12::jsonb, $13)
+                    RETURNING id, user_id, total, category, status, items, selections, design, shipping_info, address, phone, order_time, canvas_front, canvas_back, canvas_meta, source_all_id, created_at
+                    `,
+                    [
+                        req.userId,
+                        orderTotal,
+                        normalizedCategory ?? null,
+                        JSON.stringify(cartItem.items || []),
+                        JSON.stringify(selectionsWithQty),
+                        JSON.stringify(cartItem.design || {}),
+                        JSON.stringify({ address }),
+                        address,
+                        phone || null,
+                        canvasPayload.frontSnapshot ?? null,
+                        canvasPayload.backSnapshot ?? null,
+                        canvasPayload.meta ? JSON.stringify(canvasPayload.meta) : null,
+                        cartItem.source_all_id ?? null
+                    ]
+                );
+                const createdOrder = created.rows[0];
+                createdOrders.push(createdOrder);
+
+                if (cartItem.source_all_id && Number.isFinite(Number(cartItem.source_all_id))) {
+                    const source = await client.query(
+                        `SELECT id, user_id
+                         FROM all_designs
+                         WHERE id = $1
+                         LIMIT 1`,
+                        [cartItem.source_all_id]
+                    );
+
+                    const designerUserId = Number(source.rows[0]?.user_id ?? 0);
+                    const buyerUserId = req.userId;
+                    if (designerUserId && designerUserId !== buyerUserId) {
+                        const rewardAmount = 15;
+                        const insertedReward = await client.query(
+                            `INSERT INTO design_usage_rewards (order_id, source_all_id, buyer_user_id, designer_user_id, reward_amount)
+                             VALUES ($1, $2, $3, $4, $5)
+                             ON CONFLICT (order_id) DO NOTHING
+                             RETURNING id`,
+                            [createdOrder.id, cartItem.source_all_id, buyerUserId, designerUserId, rewardAmount]
+                        );
+
+                        if (insertedReward.rowCount && insertedReward.rowCount > 0) {
+                            await membershipModel.creditBalance(client, {
+                                userId: designerUserId,
+                                amount: rewardAmount,
+                                currency: 'CNY',
+                                rawPayload: {
+                                    type: 'design_usage_reward',
+                                    designerUserId,
+                                    buyerUserId,
+                                    sourceAllId: cartItem.source_all_id,
+                                    orderId: createdOrder.id,
+                                    amount: rewardAmount
+                                }
+                            });
+                        }
+                    }
+                }
+
+                if (cartItem.publish_to_all) {
+                    const allDesign = await client.query(
+                        `
+                        INSERT INTO all_designs (user_id, source_order_id, category, selections, design, canvas_front, canvas_back, canvas_meta)
+                        VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8::jsonb)
+                        RETURNING id
+                        `,
+                        [
+                            req.userId,
+                            createdOrder.id,
+                            normalizedCategory ?? null,
+                            JSON.stringify(selectionsWithQty || {}),
+                            JSON.stringify(cartItem.design || {}),
+                            canvasPayload.frontSnapshot ?? null,
+                            canvasPayload.backSnapshot ?? null,
+                            canvasPayload.meta ? JSON.stringify(canvasPayload.meta) : null
+                        ]
+                    );
+                    const allDesignId = allDesign.rows[0]?.id ?? null;
+                    if (!cartItem.source_all_id && allDesignId) {
+                        await client.query(
+                            `UPDATE orders SET source_all_id = $1 WHERE id = $2`,
+                            [allDesignId, createdOrder.id]
+                        );
+                        createdOrder.source_all_id = allDesignId;
+                    }
+                }
+            }
+
+            await client.query(`DELETE FROM cart_items WHERE user_id = $1`, [req.userId]);
+
+            await client.query('COMMIT');
+            res.status(201).json({ orders: createdOrders, membership: updatedMembership });
+        } catch (error) {
+            console.error('Cart checkout error:', error);
+            try {
+                await client.query('ROLLBACK');
+            } catch {
+                // ignore
+            }
+            res.status(500).json({ message: 'Internal server error' });
+        } finally {
+            client.release();
+        }
+    });
+
     // Debug: inspect category normalization/aliases (auth required)
     router.get('/debug/category', authenticate, async (req, res) => {
         try {
@@ -510,6 +1034,92 @@ export const createRoutes = (pool: Pool | null) => {
             res.json({ orders });
         } catch (error) {
             console.error('Get orders error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
+    // Admin: list all orders with user info
+    router.get('/admin/orders', authenticate, async (req, res) => {
+        try {
+            const adminUser = await requireAdmin(req, res);
+            if (!adminUser) return;
+
+            const orders = await orderModel.getAllOrders();
+            res.json({ orders });
+        } catch (error) {
+            console.error('Get admin orders error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
+    // Admin: update order status
+    router.put('/admin/orders/:orderId/status', authenticate, async (req, res) => {
+        try {
+            const adminUser = await requireAdmin(req, res);
+            if (!adminUser) return;
+
+            const orderId = Number(req.params.orderId);
+            if (!Number.isFinite(orderId) || orderId <= 0) {
+                return res.status(400).json({ message: 'Invalid orderId' });
+            }
+
+            const status = typeof req.body?.status === 'string' ? req.body.status.trim() : '';
+            if (!status) {
+                return res.status(400).json({ message: 'Status is required' });
+            }
+
+            const updated = await orderModel.updateOrderStatus(orderId, status);
+            if (!updated) {
+                return res.status(404).json({ message: 'Order not found' });
+            }
+
+            res.json({ order: updated });
+        } catch (error) {
+            console.error('Update order status error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
+    // Admin: update admin credentials (email/password)
+    router.put('/admin/credentials', authenticate, async (req, res) => {
+        try {
+            const adminUser = await requireAdmin(req, res);
+            if (!adminUser) return;
+
+            const { email, password } = req.body || {};
+            const updates: string[] = [];
+            const values: any[] = [];
+            let idx = 1;
+
+            if (typeof email === 'string' && email.trim().length > 0) {
+                const emailTrimmed = email.trim();
+                const existing = await userModel.findUserByEmail(emailTrimmed);
+                if (existing && Number(existing.id) !== Number((adminUser as any).id)) {
+                    return res.status(409).json({ message: 'Email already exists' });
+                }
+                updates.push(`email = $${idx}`);
+                values.push(emailTrimmed);
+                idx++;
+            }
+
+            if (typeof password === 'string' && password.trim().length >= 6) {
+                const hashed = await hashPassword(password.trim());
+                updates.push(`password = $${idx}`);
+                values.push(hashed);
+                idx++;
+            }
+
+            if (updates.length === 0) {
+                return res.status(400).json({ message: 'No valid fields to update' });
+            }
+
+            values.push((adminUser as any).id);
+            const updateQuery = `UPDATE users SET ${updates.join(', ')} WHERE id = $${idx} RETURNING id, username, email, created_at, invite_code, invited_by_user_id, invite_redeemed_at, is_admin`;
+            const updated = await pool.query(updateQuery, values);
+            const user = updated.rows[0];
+            res.json({ message: 'Admin credentials updated', user });
+        } catch (error) {
+            console.error('Update admin credentials error:', error);
             res.status(500).json({ message: 'Internal server error' });
         }
     });

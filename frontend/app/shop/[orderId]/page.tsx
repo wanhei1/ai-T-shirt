@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLanguage } from "@/contexts/language-context";
@@ -9,6 +9,7 @@ import { getCached, invalidateCached, setCachedForever } from "@/lib/client-cach
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Textarea } from "@/components/ui/textarea";
 
 type GalleryDesign = {
   order_id: number | string;
@@ -44,18 +45,20 @@ function setFavorites(ids: string[]) {
   window.localStorage.setItem(FAVORITES_KEY, JSON.stringify(ids));
 }
 
-export default function ShopDetailPage({ params }: { params: { orderId: string } }) {
+export default function ShopDetailPage({ params }: { params: Promise<{ orderId: string }> }) {
   const router = useRouter();
   const { translate } = useLanguage();
 
   const [item, setItem] = useState<GalleryDesign | null>(null);
   const [loadState, setLoadState] = useState<"loading" | "ready" | "not-found" | "error">("loading");
   const [isPlacingOrder, setIsPlacingOrder] = useState(false);
+  const [isAddingToCart, setIsAddingToCart] = useState(false);
   const [zoomFront, setZoomFront] = useState(1);
   const [zoomBack, setZoomBack] = useState(1);
   const [refreshNonce, setRefreshNonce] = useState(0);
+  const [address, setAddress] = useState("");
 
-  const orderId = params.orderId;
+  const { orderId } = use(params);
   const allDesignId = Number(orderId) || null;
 
   const clampZoom = (value: number) => Math.max(1, Math.min(3, Number(value.toFixed(2))));
@@ -164,6 +167,11 @@ export default function ShopDetailPage({ params }: { params: { orderId: string }
       return;
     }
 
+    if (!address.trim()) {
+      alert(translate({ zh: "请填写收货地址", en: "Please provide a shipping address" }));
+      return;
+    }
+
     setIsPlacingOrder(true);
     try {
       const orderItems = item.design?.elements || [];
@@ -181,7 +189,8 @@ export default function ShopDetailPage({ params }: { params: { orderId: string }
         canvas: canvasPayload,
         publishToAll: false,
         sourceAllId: allDesignId,
-        shipping_info: {},
+        shipping_info: { address: address.trim() },
+        address: address.trim(),
       });
 
       router.push("/profile");
@@ -204,6 +213,51 @@ export default function ShopDetailPage({ params }: { params: { orderId: string }
       alert(translate({ zh: "购买失败，请重试", en: "Purchase failed, please try again" }));
     } finally {
       setIsPlacingOrder(false);
+    }
+  };
+
+  const handleAddToCart = async () => {
+    if (!item) return;
+
+    const token =
+      (typeof window !== "undefined" &&
+        (localStorage.getItem("authToken") || localStorage.getItem("token"))) ||
+      null;
+
+    if (!token) {
+      alert(translate({ zh: "请先登录后再加入购物车", en: "Please log in before adding to cart" }));
+      router.push("/auth");
+      return;
+    }
+
+    setIsAddingToCart(true);
+    try {
+      const orderItems = item.design?.elements || [];
+      const canvasPayload = {
+        frontSnapshot: snapshots.front,
+        backSnapshot: snapshots.back,
+        meta: canvasMeta,
+      };
+
+      await apiClient.addCartItem({
+        items: orderItems,
+        selections: displaySelections,
+        design: item.design,
+        quantity: 1,
+        price,
+        category: typeof item.category === "string" ? item.category : null,
+        canvas: canvasPayload,
+        publishToAll: false,
+        sourceAllId: allDesignId,
+      });
+
+      alert(translate({ zh: "已加入购物车", en: "Added to cart" }));
+      router.push("/cart");
+    } catch (error) {
+      console.error("Add to cart failed", error);
+      alert(translate({ zh: "加入购物车失败，请重试", en: "Failed to add to cart. Please try again." }));
+    } finally {
+      setIsAddingToCart(false);
     }
   };
 
@@ -443,6 +497,29 @@ export default function ShopDetailPage({ params }: { params: { orderId: string }
                     {translate({ zh: "同款定制", en: "Customize" })}
                   </Button>
                 </div>
+
+                <div className="space-y-2">
+                  <label className="text-sm font-medium text-foreground">
+                    {translate({ zh: "收货地址", en: "Shipping Address" })}
+                  </label>
+                  <Textarea
+                    value={address}
+                    onChange={(event) => setAddress(event.target.value)}
+                    placeholder={translate({ zh: "请填写详细收货地址", en: "Enter full shipping address" })}
+                    className="min-h-[90px]"
+                  />
+                </div>
+
+                <Button
+                  variant="outline"
+                  className="w-full bg-transparent"
+                  onClick={handleAddToCart}
+                  disabled={isAddingToCart}
+                >
+                  {isAddingToCart
+                    ? translate({ zh: "加入中...", en: "Adding..." })
+                    : translate({ zh: "加入购物车", en: "Add to Cart" })}
+                </Button>
 
                 <Button onClick={handleBuy} disabled={isPlacingOrder} className="w-full">
                   {isPlacingOrder

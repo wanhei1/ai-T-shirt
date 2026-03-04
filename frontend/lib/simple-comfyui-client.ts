@@ -98,8 +98,9 @@ export class SimpleComfyUIClient {
       ? serverUrl.split(',').map(url => url.trim())
       : [serverUrl]
     
-    // 检查是否为生产环境
+    // 检查是否为生产环境，并支持通过环境变量强制允许本地地址
     const isProduction = typeof process !== 'undefined' && process.env?.NODE_ENV === 'production'
+    const allowLocalInProd = typeof process !== 'undefined' && process.env?.NEXT_PUBLIC_COMFYUI_ALLOW_LOCAL === 'true'
     
     // 设置备用服务器列表：配置的地址 + 默认本地地址
     const defaultLocalUrls = [
@@ -111,11 +112,10 @@ export class SimpleComfyUIClient {
       "http://localhost:8189"
     ]
     
-    // 生产环境：只使用配置的地址，过滤掉本地地址
+    // 生产环境：默认过滤本地地址；如果显式允许，则保留本地地址作为回退
     // 开发环境：使用所有地址
     let allUrls: string[]
-    if (isProduction) {
-      // 过滤掉本地地址
+    if (isProduction && !allowLocalInProd) {
       allUrls = urlsFromConfig.filter(url => 
         !url.includes('127.0.0.1') && 
         !url.includes('localhost') &&
@@ -123,8 +123,10 @@ export class SimpleComfyUIClient {
       )
       console.log(`生产环境：只使用公网地址`)
     } else {
-      // 合并所有地址
       allUrls = [...urlsFromConfig, ...defaultLocalUrls]
+      if (isProduction && allowLocalInProd) {
+        console.log(`生产环境：已开启本地回退（NEXT_PUBLIC_COMFYUI_ALLOW_LOCAL=true）`)
+      }
     }
     
     // 去重

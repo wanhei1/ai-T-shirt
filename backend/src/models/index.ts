@@ -20,6 +20,19 @@ type CreateOrderParams = {
     sourceAllId?: number | null;
 };
 
+type CreateCartItemParams = {
+    userId: number;
+    quantity: number;
+    price: number;
+    category?: string | null;
+    items: any;
+    selections: any;
+    design: any;
+    canvas?: CanvasPayload;
+    sourceAllId?: number | null;
+    publishToAll?: boolean;
+};
+
 export class UserModel {
     constructor(private pool: Pool) { }
 
@@ -117,7 +130,7 @@ export class UserModel {
     }
 
     async findUserById(id: number | string) {
-        const query = 'SELECT id, username, email, created_at, invite_code, invited_by_user_id, invite_redeemed_at FROM users WHERE id = $1';
+        const query = 'SELECT id, username, email, created_at, invite_code, invited_by_user_id, invite_redeemed_at, is_admin FROM users WHERE id = $1';
         const values = [id];
 
         const result = await this.pool.query(query, values);
@@ -173,10 +186,13 @@ export class OrderModel {
     async createOrder(params: CreateOrderParams) {
         const { userId, total, category, items, selections, design, shippingInfo, canvas, sourceAllId } = params;
 
+        const address = typeof shippingInfo?.address === 'string' ? shippingInfo.address.trim() : null;
+        const phone = typeof shippingInfo?.phone === 'string' ? shippingInfo.phone.trim() : null;
+
         const query = `
-            INSERT INTO orders (user_id, total, category, items, selections, design, shipping_info, canvas_front, canvas_back, canvas_meta, source_all_id)
-            VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10::jsonb, $11)
-            RETURNING id, user_id, total, category, status, items, selections, design, shipping_info, canvas_front, canvas_back, canvas_meta, source_all_id, created_at
+            INSERT INTO orders (user_id, total, category, items, selections, design, shipping_info, address, phone, order_time, canvas_front, canvas_back, canvas_meta, source_all_id)
+            VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, NOW(), $10, $11, $12::jsonb, $13)
+            RETURNING id, user_id, total, category, status, items, selections, design, shipping_info, address, phone, order_time, canvas_front, canvas_back, canvas_meta, source_all_id, created_at
         `;
 
         const values = [
@@ -187,6 +203,8 @@ export class OrderModel {
             JSON.stringify(selections || {}),
             JSON.stringify(design || {}),
             JSON.stringify(shippingInfo || {}),
+            address,
+            phone,
             canvas?.frontSnapshot ?? null,
             canvas?.backSnapshot ?? null,
             canvas?.meta ? JSON.stringify(canvas.meta) : null,
@@ -204,9 +222,155 @@ export class OrderModel {
     }
 
     async getOrdersByUserId(userId: number) {
-        const query = `SELECT id, user_id, total, category, status, items, selections, design, shipping_info, canvas_front, canvas_back, canvas_meta, source_all_id, created_at FROM orders WHERE user_id = $1 ORDER BY created_at DESC`;
+        const query = `SELECT id, user_id, total, category, status, items, selections, design, shipping_info, address, phone, order_time, canvas_front, canvas_back, canvas_meta, source_all_id, created_at FROM orders WHERE user_id = $1 ORDER BY created_at DESC`;
         const result = await this.pool.query(query, [userId]);
         return result.rows || [];
+    }
+
+    async getAllOrders() {
+        const query = `
+            SELECT
+                o.id,
+                o.user_id,
+                o.total,
+                o.category,
+                o.status,
+                o.items,
+                o.selections,
+                o.design,
+                o.shipping_info,
+                o.address,
+                o.phone,
+                o.order_time,
+                o.canvas_front,
+                o.canvas_back,
+                o.canvas_meta,
+                o.source_all_id,
+                o.created_at,
+                u.email AS user_email,
+                u.username AS user_name
+            FROM orders o
+            LEFT JOIN users u ON o.user_id = u.id
+            ORDER BY o.created_at DESC
+        `;
+        const result = await this.pool.query(query);
+        return result.rows || [];
+    }
+
+    async updateOrderStatus(orderId: number, status: string) {
+        const query = `UPDATE orders SET status = $2 WHERE id = $1 RETURNING id, status`;
+        const result = await this.pool.query(query, [orderId, status]);
+        return result.rows[0] || null;
+    }
+}
+
+export class CartModel {
+    constructor(private pool: Pool) { }
+
+    async createCartItem(params: CreateCartItemParams) {
+        const {
+            userId,
+            quantity,
+            price,
+            category,
+            items,
+            selections,
+            design,
+            canvas,
+            sourceAllId,
+            publishToAll
+        } = params;
+
+        const query = `
+            INSERT INTO cart_items (user_id, quantity, price, category, items, selections, design, canvas_front, canvas_back, canvas_meta, source_all_id, publish_to_all)
+            VALUES ($1, $2, $3, $4, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, $10::jsonb, $11, $12)
+            RETURNING id, user_id, quantity, price, category, items, selections, design, canvas_front, canvas_back, canvas_meta, source_all_id, publish_to_all, created_at, updated_at
+        `;
+
+        const values = [
+            userId,
+            Math.max(1, Number(quantity) || 1),
+            Number(price) || 0,
+            category ?? null,
+            JSON.stringify(items || []),
+            JSON.stringify(selections || {}),
+            JSON.stringify(design || {}),
+            canvas?.frontSnapshot ?? null,
+            canvas?.backSnapshot ?? null,
+            canvas?.meta ? JSON.stringify(canvas.meta) : null,
+            sourceAllId ?? null,
+            publishToAll !== false
+        ];
+
+        const result = await this.pool.query(query, values);
+        return result.rows[0];
+    }
+
+    async listCartItems(userId: number) {
+        const query = `
+            SELECT id, user_id, quantity, price, category, items, selections, design, canvas_front, canvas_back, canvas_meta, source_all_id, publish_to_all, created_at, updated_at
+            FROM cart_items
+            WHERE user_id = $1
+            ORDER BY updated_at DESC, created_at DESC
+        `;
+        const result = await this.pool.query(query, [userId]);
+        return result.rows || [];
+    }
+
+    async getCartItemsForUpdate(executor: { query: Pool['query'] }, userId: number) {
+        const query = `
+            SELECT id, user_id, quantity, price, category, items, selections, design, canvas_front, canvas_back, canvas_meta, source_all_id, publish_to_all, created_at, updated_at
+            FROM cart_items
+            WHERE user_id = $1
+            ORDER BY created_at ASC
+            FOR UPDATE
+        `;
+        const result = await executor.query(query, [userId]);
+        return result.rows || [];
+    }
+
+    async updateCartItem(userId: number, cartItemId: number, updates: { quantity?: number; publishToAll?: boolean }) {
+        const fields: string[] = [];
+        const values: any[] = [];
+        let idx = 1;
+
+        if (typeof updates.quantity === 'number') {
+            fields.push(`quantity = $${idx}`);
+            values.push(Math.max(1, Math.floor(updates.quantity)));
+            idx++;
+        }
+
+        if (typeof updates.publishToAll === 'boolean') {
+            fields.push(`publish_to_all = $${idx}`);
+            values.push(updates.publishToAll);
+            idx++;
+        }
+
+        if (!fields.length) return null;
+
+        fields.push(`updated_at = NOW()`);
+
+        values.push(userId, cartItemId);
+        const query = `
+            UPDATE cart_items
+            SET ${fields.join(', ')}
+            WHERE user_id = $${idx} AND id = $${idx + 1}
+            RETURNING id, user_id, quantity, price, category, items, selections, design, canvas_front, canvas_back, canvas_meta, source_all_id, publish_to_all, created_at, updated_at
+        `;
+
+        const result = await this.pool.query(query, values);
+        return result.rows[0] || null;
+    }
+
+    async removeCartItem(userId: number, cartItemId: number) {
+        const query = `DELETE FROM cart_items WHERE user_id = $1 AND id = $2 RETURNING id`;
+        const result = await this.pool.query(query, [userId, cartItemId]);
+        return result.rows[0] || null;
+    }
+
+    async clearCart(userId: number) {
+        const query = `DELETE FROM cart_items WHERE user_id = $1`;
+        await this.pool.query(query, [userId]);
     }
 }
 
@@ -244,7 +408,7 @@ export class AllDesignModel {
         return result.rows[0];
     }
 
-    async list(params?: { limit?: number; offset?: number; category?: string; sort?: 'new' | 'sales' }) {
+    async list(params?: { limit?: number; offset?: number; category?: string; sort?: 'new' | 'sales'; search?: string }) {
         const limit = Math.min(Math.max(Number(params?.limit ?? 30) || 30, 1), 100);
         const offset = Math.max(Number(params?.offset ?? 0) || 0, 0);
 
@@ -254,12 +418,38 @@ export class AllDesignModel {
 
         const canonicalCategory = normalizeCategory(category);
         const categoryFilter = canonicalCategory ? categoryAliases(canonicalCategory) : category;
+        const search = typeof params?.search === 'string' && params.search.trim().length > 0
+            ? params.search.trim()
+            : null;
 
-        const whereSql = categoryFilter
-            ? (Array.isArray(categoryFilter)
-                ? 'WHERE a.category = ANY($3::text[])'
-                : 'WHERE a.category = $3')
-            : '';
+        const whereParts: string[] = [];
+        const values: any[] = [limit, offset];
+        let paramIndex = 3;
+
+        if (categoryFilter) {
+            whereParts.push(
+                Array.isArray(categoryFilter)
+                    ? `a.category = ANY($${paramIndex}::text[])`
+                    : `a.category = $${paramIndex}`
+            );
+            values.push(categoryFilter);
+            paramIndex++;
+        }
+
+        if (search) {
+            whereParts.push(
+                `(
+                    a.category ILIKE $${paramIndex}
+                    OR u.username ILIKE $${paramIndex}
+                    OR a.selections::text ILIKE $${paramIndex}
+                    OR a.design::text ILIKE $${paramIndex}
+                )`
+            );
+            values.push(`%${search}%`);
+            paramIndex++;
+        }
+
+        const whereSql = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
 
         const sort = params?.sort === 'sales' ? 'sales' : 'new';
         const orderByRankedSql = sort === 'sales'
@@ -279,6 +469,7 @@ export class AllDesignModel {
                 SELECT a.id
                 FROM all_designs a
                 LEFT JOIN sales s ON s.source_all_id = a.id
+                LEFT JOIN users u ON u.id = a.user_id
                 ${whereSql}
                 ${orderByRankedSql}
                 LIMIT $1 OFFSET $2
@@ -300,7 +491,6 @@ export class AllDesignModel {
             ${orderByRankedSql}
         `;
 
-        const values: any[] = categoryFilter ? [limit, offset, categoryFilter] : [limit, offset];
         const result = await this.pool.query(query, values);
         return result.rows || [];
     }
