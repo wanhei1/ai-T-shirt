@@ -84,6 +84,13 @@ export class SimpleComfyUIClient {
   private serverUrl: string;
   private fallbackUrls: string[];
   private activeUrl: string | null = null;
+  private readonly defaultModelName: string;
+  private readonly defaultSamplerName: string;
+  private readonly defaultScheduler: string;
+  private readonly defaultSteps: number;
+  private readonly defaultCfg: number;
+  private readonly defaultWidth: number;
+  private readonly defaultHeight: number;
 
   constructor(serverUrl: string = "http://127.0.0.1:8188") {
     this.serverUrl = serverUrl;
@@ -103,6 +110,14 @@ export class SimpleComfyUIClient {
 
     const allUrls = [...urlsFromConfig, ...defaultLocalUrls];
     this.fallbackUrls = Array.from(new Set(allUrls));
+
+    this.defaultModelName = process.env.COMFYUI_MODEL_NAME || "dreamshaper_8.safetensors";
+    this.defaultSamplerName = process.env.COMFYUI_DEFAULT_SAMPLER || "euler";
+    this.defaultScheduler = process.env.COMFYUI_DEFAULT_SCHEDULER || "normal";
+    this.defaultSteps = Number.parseInt(process.env.COMFYUI_DEFAULT_STEPS || "24", 10);
+    this.defaultCfg = Number.parseFloat(process.env.COMFYUI_DEFAULT_CFG || "8");
+    this.defaultWidth = Number.parseInt(process.env.COMFYUI_DEFAULT_WIDTH || "768", 10);
+    this.defaultHeight = Number.parseInt(process.env.COMFYUI_DEFAULT_HEIGHT || "768", 10);
   }
 
   private async findAvailableServer(): Promise<string | null> {
@@ -150,20 +165,22 @@ export class SimpleComfyUIClient {
       steps?: number;
       cfg?: number;
       seed?: number;
+      denoise?: number;
       modelName?: string;
       samplerName?: string;
       scheduler?: string;
     } = {}
   ): SimpleWorkflow {
     const {
-      width = 512,
-      height = 512,
-      steps = 20,
-      cfg = 8,
+      width = this.defaultWidth,
+      height = this.defaultHeight,
+      steps = this.defaultSteps,
+      cfg = this.defaultCfg,
       seed = Math.floor(Math.random() * 1000000),
-      modelName = "v1-5-pruned-emaonly.ckpt",
-      samplerName = "euler",
-      scheduler = "normal",
+      denoise = 1,
+      modelName = this.defaultModelName,
+      samplerName = this.defaultSamplerName,
+      scheduler = this.defaultScheduler,
     } = options;
 
     return {
@@ -171,7 +188,7 @@ export class SimpleComfyUIClient {
         class_type: "KSampler",
         inputs: {
           cfg,
-          denoise: 1,
+          denoise,
           latent_image: ["5", 0],
           model: ["4", 0],
           negative: ["7", 0],
@@ -353,6 +370,7 @@ export class SimpleComfyUIClient {
       steps?: number;
       cfg?: number;
       seed?: number;
+      denoise?: number;
       modelName?: string;
       samplerName?: string;
       scheduler?: string;

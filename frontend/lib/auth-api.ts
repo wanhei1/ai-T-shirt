@@ -6,6 +6,12 @@ const potentialApiBases = envApiBase
   .split(',')
   .map(url => url.trim())
   .filter(Boolean);
+const browserProxyBaseUrl = typeof window !== 'undefined' ? `${window.location.origin}/backend` : null;
+
+if (browserProxyBaseUrl) {
+  // Prefer same-origin proxy so browser calls frontend origin only.
+  potentialApiBases.unshift(browserProxyBaseUrl);
+}
 
 if (potentialApiBases.length === 0) {
   potentialApiBases.push(fallbackApiBase);
@@ -89,6 +95,12 @@ export interface UpdateProfileResponse {
 }
 
 class AuthApi {
+    private joinUrl(base: string, path: string): string {
+      const normalizedBase = base.replace(/\/+$/, '');
+      const normalizedPath = path.replace(/^\/+/, '');
+      return `${normalizedBase}/${normalizedPath}`;
+    }
+
   private authToken: string | null = null;
   private baseUrlPromise: Promise<string>;
 
@@ -97,9 +109,13 @@ class AuthApi {
   }
 
   private async findAvailableBaseUrl(): Promise<string> {
+    if (browserProxyBaseUrl) {
+      return browserProxyBaseUrl;
+    }
+
     for (const baseUrl of sanitizedApiBases) {
       try {
-        const healthUrl = new URL('/health', baseUrl).toString();
+        const healthUrl = this.joinUrl(baseUrl, '/health');
         const response = await fetch(healthUrl, {
           method: 'GET',
           signal: AbortSignal.timeout(3000),
@@ -140,7 +156,7 @@ class AuthApi {
     // Use the URL constructor to correctly join base and path and avoid
     // accidental double-slashes or missing "/api" prefixes.
     const baseUrl = await this.getBaseUrl();
-    const endpoint = new URL(url, baseUrl).toString();
+    const endpoint = this.joinUrl(baseUrl, url);
 
     let response: Response;
     try {
@@ -171,6 +187,21 @@ class AuthApi {
         const text = await response.text().catch(() => '');
         if (text) {
           serverDetails = text.length > 500 ? `${text.slice(0, 500)}...` : text;
+        }
+      }
+
+      const normalizedServerDetails = serverDetails.toLowerCase();
+      const isExpiredOrInvalidToken =
+        response.status === 401 ||
+        (response.status === 403 && normalizedServerDetails.includes('failed to authenticate token'));
+
+      if (typeof window !== 'undefined' && isExpiredOrInvalidToken) {
+        localStorage.removeItem('authToken');
+        localStorage.removeItem('token');
+        localStorage.removeItem('user');
+        this.clearAuthToken();
+        if (window.location.pathname !== '/auth') {
+          window.location.assign('/auth');
         }
       }
 

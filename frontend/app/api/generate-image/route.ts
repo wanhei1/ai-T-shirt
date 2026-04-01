@@ -34,7 +34,20 @@ async function getBackendBaseUrl(): Promise<string> {
 
 export async function POST(request: NextRequest) {
   try {
-    const { prompt, style = "realistic", width = 512, height = 512 } = await request.json()
+    const {
+      prompt,
+      style = "realistic",
+      width = 768,
+      height = 768,
+      steps,
+      cfg,
+      seed,
+      denoise,
+      modelName,
+      samplerName,
+      scheduler,
+      negativePrompt,
+    } = await request.json()
 
     if (!prompt) {
       return NextResponse.json({ error: "Prompt is required" }, { status: 400 })
@@ -50,7 +63,20 @@ export async function POST(request: NextRequest) {
       },
       body: JSON.stringify({
         type: "ai-image",
-        payload: { prompt, style, width, height },
+        payload: {
+          prompt,
+          style,
+          width,
+          height,
+          steps,
+          cfg,
+          seed,
+          denoise,
+          modelName,
+          samplerName,
+          scheduler,
+          negativePrompt,
+        },
       }),
       signal: AbortSignal.timeout(10000),
     })

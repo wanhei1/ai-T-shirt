@@ -17,7 +17,16 @@ const TRYON_CONCURRENCY = Number.parseInt(process.env.JOB_CONCURRENCY_TRYON || "
 
 const COMFYUI_URL = process.env.COMFYUI_URL || "http://127.0.0.1:8188";
 
+const PURE_ELEMENT_PREFIX =
+  "isolated standalone graphic element, single subject, centered composition, design asset only, no product mockup";
+const PURE_ELEMENT_SUFFIX =
+  "clean plain background, icon or sticker style output, high subject clarity, printable element only";
+const PURE_ELEMENT_NEGATIVE =
+  "person, human, portrait, model, body, face, hand, hands, skin, clothing, t-shirt, shirt, hoodie, wearing, mannequin, fashion photo, product photo, mockup, scene";
+
 const styleConfigs: Record<string, {
+  promptPrefix: string;
+  promptSuffix: string;
   negativePrompt: string;
   steps: number;
   cfg: number;
@@ -25,48 +34,103 @@ const styleConfigs: Record<string, {
   scheduler: string;
 }> = {
   realistic: {
-    negativePrompt: "bad hands, low quality, blurry, ugly, deformed",
-    steps: 25,
+    promptPrefix: "realistic photo, high detail, intricate texture",
+    promptSuffix: "high detail, high contrast, studio quality lighting, no border, no frame",
+    negativePrompt: "lowres, blurry, jpeg artifacts, text watermark, signature, frame, border, deformed, extra limbs, bad anatomy",
+    steps: 28,
     cfg: 7.5,
     samplerName: "dpmpp_2m",
     scheduler: "karras",
   },
   cartoon: {
-    negativePrompt: "realistic, photo, bad hands, low quality",
-    steps: 20,
+    promptPrefix: "cartoon illustration, bold shapes",
+    promptSuffix: "vector-like clean edges, flat colors, strong silhouette, no border, no frame",
+    negativePrompt: "photo, realistic skin, lowres, blurry, text watermark, signature, frame, border, cluttered background",
+    steps: 24,
     cfg: 8.0,
     samplerName: "euler",
     scheduler: "normal",
   },
   anime: {
-    negativePrompt: "realistic, photo, western, bad hands, low quality",
-    steps: 20,
+    promptPrefix: "anime-style illustration",
+    promptSuffix: "clean lineart, vibrant colors, cel shading, no border, no frame",
+    negativePrompt: "photo, realistic, western comic, lowres, blurry, text watermark, signature, frame, border, messy background",
+    steps: 24,
     cfg: 7.0,
     samplerName: "dpmpp_2m",
     scheduler: "karras",
   },
   abstract: {
-    negativePrompt: "realistic, photo, figurative, bad quality",
-    steps: 30,
+    promptPrefix: "abstract standalone motif",
+    promptSuffix: "balanced composition, bold color harmony, no border, no frame",
+    negativePrompt: "photo, realistic face, lowres, muddy colors, blurry, text watermark, signature, frame, border",
+    steps: 32,
     cfg: 9.0,
     samplerName: "euler_ancestral",
     scheduler: "normal",
   },
   minimalist: {
-    negativePrompt: "complex, detailed, cluttered, busy, bad quality",
-    steps: 15,
+    promptPrefix: "minimalist standalone graphic",
+    promptSuffix: "clean geometry, large negative space, crisp edges, no border, no frame",
+    negativePrompt: "complex details, cluttered layout, noisy texture, lowres, blurry, text watermark, signature, frame, border",
+    steps: 20,
     cfg: 6.0,
     samplerName: "euler",
     scheduler: "normal",
   },
   vintage: {
-    negativePrompt: "modern, futuristic, bad hands, low quality",
-    steps: 25,
+    promptPrefix: "vintage standalone illustration",
+    promptSuffix: "retro palette, distressed poster mood, balanced layout, no border, no frame",
+    negativePrompt: "futuristic, neon cyberpunk, lowres, blurry, text watermark, signature, frame, border, malformed",
+    steps: 28,
     cfg: 8.5,
     samplerName: "dpmpp_2m",
     scheduler: "karras",
   },
 };
+
+function buildPositivePrompt(userPrompt: string, styleConfig: ReturnType<typeof getStyleConfig>): string {
+  const base = userPrompt.trim();
+  const compact = base.replace(/\s+/g, " ").trim();
+  const isShortPrompt = compact.length <= 8;
+  const hasCjk = /[\u4e00-\u9fff]/.test(compact);
+
+  const zhKeywordMap: Array<[RegExp, string]> = [
+    [/彩虹|七彩|虹/i, "rainbow"],
+    [/巨龙|龙/i, "dragon"],
+    [/火焰|喷火|烈焰/i, "flames"],
+    [/猫|猫咪/i, "cat"],
+    [/狗|小狗/i, "dog"],
+    [/花|花卉|植物|叶子/i, "floral botanical"],
+    [/城市|都市|赛博朋克/i, "city skyline"],
+    [/山|山脉/i, "mountains"],
+    [/几何/i, "geometric"],
+    [/抽象/i, "abstract"],
+    [/水彩/i, "watercolor"],
+    [/复古/i, "vintage retro"],
+    [/极简|简约/i, "minimalist"],
+    [/太空|银河|星空|行星/i, "space galaxy planets"],
+    [/墨镜/i, "sunglasses"],
+  ];
+
+  const englishHints = hasCjk
+    ? zhKeywordMap
+        .filter(([pattern]) => pattern.test(compact))
+        .map(([, hint]) => hint)
+        .filter((value, index, arr) => arr.indexOf(value) === index)
+    : [];
+
+  const multilingualSubject = hasCjk
+    ? `${compact}${englishHints.length > 0 ? ` (${englishHints.join(", ")})` : ""}`
+    : compact;
+
+  const subjectBlock = `main subject: ${multilingualSubject}, (${multilingualSubject}:1.35), centered ${multilingualSubject}`;
+  const brevityAssist = isShortPrompt
+    ? "simple and clear iconic depiction of the requested subject"
+    : "preserve user subject details faithfully";
+
+  return `${PURE_ELEMENT_PREFIX}, ${subjectBlock}, ${brevityAssist}, ${styleConfig.promptPrefix}, ${styleConfig.promptSuffix}, ${PURE_ELEMENT_SUFFIX}`;
+}
 
 function getStyleConfig(style?: string) {
   if (style && styleConfigs[style]) {
@@ -246,15 +310,17 @@ async function runAiImageJob(payload: AIImageJobPayload) {
   const { prompt, style, width, height } = payload;
   const client = new SimpleComfyUIClient(COMFYUI_URL);
   const config = getStyleConfig(style);
+  const positivePrompt = buildPositivePrompt(prompt, config);
+  const negativePrompt = `${config.negativePrompt}, ${PURE_ELEMENT_NEGATIVE}, unrelated subject, wrong subject, random texture, camouflage texture, marble texture, noisy pattern, chaotic background, abstract texture only, full body, upper body, selfie, photo of a person`;
 
-  const result = await client.generateImage(prompt, config.negativePrompt, {
-    width: width || 512,
-    height: height || 512,
+  const result = await client.generateImage(positivePrompt, negativePrompt, {
+    width: width || 768,
+    height: height || 768,
     steps: config.steps,
     cfg: config.cfg,
     samplerName: config.samplerName,
     scheduler: config.scheduler,
-    modelName: process.env.COMFYUI_MODEL_NAME || "dreamshaper_8.safetensors",
+    modelName: process.env.COMFYUI_MODEL_NAME || process.env.COMFYUI_CHINESE_MODEL_NAME || "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors",
   });
 
   const base64 = Buffer.from(result.imageBuffer).toString("base64");

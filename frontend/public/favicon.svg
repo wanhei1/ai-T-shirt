@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="T-shirt icon">
+  <rect width="64" height="64" rx="12" fill="#111827"/>
+  <path d="M22 16h6l4 6 4-6h6l8 10-7 7v21H21V33l-7-7 8-10z" fill="#f9fafb"/>
+  <rect x="27" y="28" width="10" height="14" rx="2" fill="#2563eb"/>
+</svg>

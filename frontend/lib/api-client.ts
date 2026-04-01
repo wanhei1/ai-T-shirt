@@ -4,7 +4,13 @@ import type { AuthResponse, LoginRequest, RegisterRequest, User } from '@/types/
 
 // 1. Get the list of potential API URLs from environment variables.
 const apiUrlsString = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8189';
-const potentialApiUrls = apiUrlsString.split(',').map(url => url.trim());
+const potentialApiUrls = apiUrlsString.split(',').map(url => url.trim()).filter(Boolean);
+const browserProxyBaseUrl = typeof window !== 'undefined' ? `${window.location.origin}/backend` : null;
+
+if (browserProxyBaseUrl) {
+  // Use Next.js rewrite proxy first so browser does not need direct access to backend port.
+  potentialApiUrls.unshift(browserProxyBaseUrl);
+}
 
 // 2. A variable to hold the determined, working API base URL. This acts as a cache.
 let determinedApiBaseUrl: string | null = null;
@@ -14,6 +20,13 @@ const findAvailableApiUrl = async (): Promise<string> => {
   // If we've already found a working URL, return it immediately.
   if (determinedApiBaseUrl) {
     return determinedApiBaseUrl;
+  }
+
+  // In browser, always prefer same-origin proxy and skip extra probing.
+  // This avoids timeout noise when localhost/remote addresses are unreachable from the client device.
+  if (browserProxyBaseUrl) {
+    determinedApiBaseUrl = browserProxyBaseUrl;
+    return browserProxyBaseUrl;
   }
 
   for (const url of potentialApiUrls) {
@@ -37,7 +50,7 @@ const findAvailableApiUrl = async (): Promise<string> => {
   // If no URL is available after checking all, fall back to the first one.
   // This allows for error messages on the UI instead of a total crash.
   console.error("🚨 No available API server found from the list. Falling back to the first configured URL.");
-  determinedApiBaseUrl = potentialApiUrls[0];
+  determinedApiBaseUrl = potentialApiUrls[0] || 'http://localhost:8189';
   return determinedApiBaseUrl;
 };
 
@@ -96,9 +109,14 @@ class ApiClient {
         const err = new Error(errorMessage) as Error & { status?: number }
         err.status = response.status
 
+        const normalizedMessage = String(errorMessage).toLowerCase()
+        const isExpiredOrInvalidToken =
+          response.status === 401 ||
+          (response.status === 403 && normalizedMessage.includes("failed to authenticate token"))
+
         // If auth failed, proactively clear stored tokens to force re-login.
-        // Do NOT clear on generic 403s (e.g. membership required).
-        if (typeof window !== "undefined" && response.status === 401) {
+        // Keep generic 403 behavior (e.g. membership required) untouched.
+        if (typeof window !== "undefined" && isExpiredOrInvalidToken) {
           localStorage.removeItem('authToken')
           localStorage.removeItem('token')
           localStorage.removeItem('user')
@@ -110,7 +128,7 @@ class ApiClient {
         }
 
         const method = (options.method || 'GET').toUpperCase()
-        if (response.status === 401 && method === 'GET') {
+        if (isExpiredOrInvalidToken && method === 'GET') {
           return Promise.resolve(null as T)
         }
 

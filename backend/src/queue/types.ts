@@ -6,6 +6,14 @@ export type AIImageJobPayload = {
   style?: string;
   width?: number;
   height?: number;
+  steps?: number;
+  cfg?: number;
+  seed?: number;
+  modelName?: string;
+  samplerName?: string;
+  scheduler?: string;
+  negativePrompt?: string;
+  denoise?: number;
 };
 
 export type TryOnJobPayload = {

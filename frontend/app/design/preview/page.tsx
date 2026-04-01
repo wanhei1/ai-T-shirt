@@ -28,44 +28,67 @@ type TryOnCache = {
   createdAt: number
 }
 
-const TRYON_ESTIMATED_SECONDS_PER_JOB = 35
-const MODEL_CROP_RATIO = 0.6
-
-const cropModelToUpperBody = async (file: File): Promise<File> => {
-  if (typeof window === "undefined") return file
-
-  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-    const url = URL.createObjectURL(file)
-    const image = new window.Image()
-    image.onload = () => {
-      URL.revokeObjectURL(url)
-      resolve(image)
+const readTryOnCache = (): TryOnCache | null => {
+  if (typeof window === "undefined") return null
+  const read = (storage: Storage) => {
+    try {
+      const raw = storage.getItem(TRYON_CACHE_STORAGE_KEY)
+      return raw ? (JSON.parse(raw) as TryOnCache) : null
+    } catch {
+      return null
     }
-    image.onerror = () => {
-      URL.revokeObjectURL(url)
-      reject(new Error("Failed to load model image"))
+  }
+  return read(window.localStorage) || read(window.sessionStorage)
+}
+
+const writeTryOnCache = (cache: TryOnCache): void => {
+  if (typeof window === "undefined") return
+  const raw = JSON.stringify(cache)
+  try {
+    window.localStorage.setItem(TRYON_CACHE_STORAGE_KEY, raw)
+    return
+  } catch {
+    // localStorage may exceed quota for large payloads
+  }
+  try {
+    window.sessionStorage.setItem(TRYON_CACHE_STORAGE_KEY, raw)
+  } catch {
+    // ignore storage failures
+  }
+}
+
+const removeTryOnCache = (): void => {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.removeItem(TRYON_CACHE_STORAGE_KEY)
+  } catch {
+    // ignore
+  }
+  try {
+    window.sessionStorage.removeItem(TRYON_CACHE_STORAGE_KEY)
+  } catch {
+    // ignore
+  }
+}
+
+const stableStringify = (value: unknown): string => {
+  const sortRecursively = (input: unknown): unknown => {
+    if (Array.isArray(input)) {
+      return input.map(sortRecursively)
     }
-    image.src = url
-  })
+    if (input && typeof input === "object") {
+      const obj = input as Record<string, unknown>
+      const sortedKeys = Object.keys(obj).sort((a, b) => a.localeCompare(b))
+      const sorted: Record<string, unknown> = {}
+      for (const key of sortedKeys) {
+        sorted[key] = sortRecursively(obj[key])
+      }
+      return sorted
+    }
+    return input
+  }
 
-  const width = img.naturalWidth || img.width
-  const height = img.naturalHeight || img.height
-  const cropHeight = Math.max(1, Math.round(height * MODEL_CROP_RATIO))
-
-  const canvas = document.createElement("canvas")
-  canvas.width = width
-  canvas.height = cropHeight
-  const ctx = canvas.getContext("2d")
-  if (!ctx) return file
-
-  ctx.drawImage(img, 0, 0, width, cropHeight, 0, 0, width, cropHeight)
-
-  const blob = await new Promise<Blob | null>((resolve) => {
-    canvas.toBlob(resolve, file.type || "image/png")
-  })
-  if (!blob) return file
-
-  return new File([blob], file.name, { type: blob.type || file.type || "image/png" })
+  return JSON.stringify(sortRecursively(value))
 }
 
 export default function PreviewPage() {
@@ -77,13 +100,11 @@ export default function PreviewPage() {
   const [isExporting, setIsExporting] = useState(false)
   const [orderPlaced, setOrderPlaced] = useState(false)
   const [isSubmitting, setIsSubmitting] = useState(false)
-  const [isAddingToCart, setIsAddingToCart] = useState(false)
-  const [isAddingToCart, setIsAddingToCart] = useState(false)
   const [isTryOnLoading, setIsTryOnLoading] = useState(false)
   const [tryOnError, setTryOnError] = useState<string | null>(null)
-  const [tryOnQueueHint, setTryOnQueueHint] = useState<string | null>(null)
   const [tryOnEnabled, setTryOnEnabled] = useState(false)
   const [tryOnSnapshots, setTryOnSnapshots] = useState<{ front: string | null; back: string | null } | null>(null)
+  const [designTryOnSignature, setDesignTryOnSignature] = useState<string | null>(null)
   const [address, setAddress] = useState("")
 
   const activeTryOnUrl = useMemo(() => {
@@ -95,9 +116,8 @@ export default function PreviewPage() {
   useEffect(() => {
     if (typeof window === "undefined") return
     try {
-      const raw = window.localStorage.getItem(TRYON_CACHE_STORAGE_KEY)
-      if (!raw) return
-      const parsed = JSON.parse(raw) as TryOnCache
+      const parsed = readTryOnCache()
+      if (!parsed) return
       const front = typeof parsed.front === "string" && parsed.front.length > 0 ? parsed.front : null
       const back = typeof parsed.back === "string" && parsed.back.length > 0 ? parsed.back : null
       if (front || back) {
@@ -137,6 +157,7 @@ export default function PreviewPage() {
 
   const renderTryOnClothSnapshot = async (side: "front" | "back") => {
     if (!designData) return null
+    const sideElements = (designData.elements || []).filter((el) => el.visible && el.side === side)
 
     // Prefer rendering try-on cloth on the base shirt image at its native size.
     // This avoids adding an artificial background behind the garment, which can
@@ -147,6 +168,17 @@ export default function PreviewPage() {
 
     const meta = resolvedCanvasMeta
     const base = await loadImage(shirtPhotoSrc)
+    if (side === "back" && sideElements.length === 0) {
+      const photoCanvas = document.createElement("canvas")
+      photoCanvas.width = base.naturalWidth || base.width
+      photoCanvas.height = base.naturalHeight || base.height
+      const photoCtx = photoCanvas.getContext("2d")
+      if (!photoCtx) return null
+      photoCtx.drawImage(base, 0, 0, photoCanvas.width, photoCanvas.height)
+      // Keep empty-back cloth as plain shirt photo to avoid print-area frame artifacts.
+      return photoCanvas.toDataURL("image/jpeg", 0.95)
+    }
+
     const baseWidth = base.naturalWidth || base.width
     const baseHeight = base.naturalHeight || base.height
 
@@ -169,8 +201,7 @@ export default function PreviewPage() {
     ctx.rect(0, 0, meta.printArea.width * sx, meta.printArea.height * sy)
     ctx.clip()
 
-    const elements = (designData.elements || []).filter((el) => el.visible && el.side === side)
-    for (const element of elements) {
+    for (const element of sideElements) {
       ctx.save()
       ctx.translate((element.x + element.width / 2) * sx, (element.y + element.height / 2) * sy)
       ctx.rotate((element.rotation * Math.PI) / 180)
@@ -298,6 +329,8 @@ export default function PreviewPage() {
     const load = async () => {
       try {
         const parsed = JSON.parse(storedDesignData) as DesignData
+        const signature = parsed?.tryOnSignature
+        setDesignTryOnSignature(typeof signature === "string" ? signature : null)
         if (!parsed.canvas) {
           parsed.canvas = buildCanvasMeta(parsed?.selections?.color)
         }
@@ -314,22 +347,20 @@ export default function PreviewPage() {
   useEffect(() => {
     if (!designData || typeof window === "undefined") return
     try {
-      const raw = window.localStorage.getItem(TRYON_CACHE_STORAGE_KEY)
-      if (!raw) return
-
-      const cached = JSON.parse(raw) as TryOnCache
+      const cached = readTryOnCache()
+      if (!cached) return
       const genderRaw = window.localStorage.getItem(TRYON_MODEL_STORAGE_KEY) as TryOnModelGender | null
       const gender: TryOnModelGender = genderRaw === "female" ? "female" : "male"
-      const signature = computeTryOnSignature(gender)
+      const signature = designTryOnSignature || computeTryOnSignature(gender)
       if (!cached || cached.signature !== signature) {
-        window.localStorage.removeItem(TRYON_CACHE_STORAGE_KEY)
+        removeTryOnCache()
         setTryOnSnapshots(null)
         setTryOnEnabled(false)
       }
     } catch {
       // ignore
     }
-  }, [designData])
+  }, [designData, designTryOnSignature])
 
   const exportDesign = async () => {
     if (!designData) return
@@ -414,7 +445,35 @@ export default function PreviewPage() {
     canvas.height = height
     const ctx = canvas.getContext("2d")
     if (!ctx) return dataUrl
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+
+    // Keep aspect ratio to avoid stretching garments/person, which can break try-on quality.
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    ctx.fillStyle = "#ffffff"
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+    const scale = Math.min(canvas.width / img.width, canvas.height / img.height)
+    const drawWidth = Math.max(1, Math.round(img.width * scale))
+    const drawHeight = Math.max(1, Math.round(img.height * scale))
+    const offsetX = Math.floor((canvas.width - drawWidth) / 2)
+    const offsetY = Math.floor((canvas.height - drawHeight) / 2)
+    ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight)
+
+    return canvas.toDataURL("image/png")
+  }
+
+  const cropModelToUpperBody = async (dataUrl: string, side: "front" | "back"): Promise<string> => {
+    const img = await loadImage(dataUrl)
+    const width = img.naturalWidth || img.width
+    const height = img.naturalHeight || img.height
+    const ratio = 0.66
+    const cropHeight = Math.max(1, Math.round(height * ratio))
+
+    const canvas = document.createElement("canvas")
+    canvas.width = width
+    canvas.height = cropHeight
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return dataUrl
+    ctx.drawImage(img, 0, 0, width, cropHeight, 0, 0, width, cropHeight)
     return canvas.toDataURL("image/png")
   }
 
@@ -444,7 +503,7 @@ export default function PreviewPage() {
       }))
       .sort((a, b) => String(a.id).localeCompare(String(b.id)))
 
-    return JSON.stringify({ selections: designData?.selections, elements: normElements, gender })
+    return stableStringify({ selections: designData?.selections, elements: normElements, gender })
   }
 
   const loadModelFile = async (src: string) => {
@@ -454,15 +513,13 @@ export default function PreviewPage() {
     }
     const blob = await resp.blob()
     const filename = src.split("/").pop() || "model.png"
-    const file = new File([blob], filename, { type: blob.type || "image/png" })
-    return cropModelToUpperBody(file)
+    return new File([blob], filename, { type: blob.type || "image/png" })
   }
 
   const runTryOn = async (side: "front" | "back") => {
     if (!designData) return
     setIsTryOnLoading(true)
     setTryOnError(null)
-    setTryOnQueueHint(null)
 
     try {
       const rawGender = (typeof window !== "undefined" ? window.localStorage.getItem(TRYON_MODEL_STORAGE_KEY) : null) as
@@ -472,7 +529,8 @@ export default function PreviewPage() {
       const personFile = await loadModelFile(getTryOnModelSrc(gender, side))
 
       const personDataUrl = await readBlobAsDataUrl(personFile)
-      const resizedPersonDataUrl = await resizeDataUrlToTarget(personDataUrl)
+      const personTorsoDataUrl = await cropModelToUpperBody(personDataUrl, side)
+      const resizedPersonDataUrl = await resizeDataUrlToTarget(personTorsoDataUrl)
 
       const clothSnapshot = await renderTryOnClothSnapshot(side)
       if (!clothSnapshot) {
@@ -486,18 +544,9 @@ export default function PreviewPage() {
         payload: {
           personDataUrl: resizedPersonDataUrl,
           clothDataUrl: resizedClothSnapshot,
+          clothType: "upper",
         },
       })
-
-      const waiting = jobResp.queueStats?.waiting ?? 0
-      const active = jobResp.queueStats?.active ?? 0
-      const etaSeconds = Math.max(0, waiting * TRYON_ESTIMATED_SECONDS_PER_JOB + (active > 0 ? 12 : 0))
-      setTryOnQueueHint(
-        translate({
-          zh: `队列中等待 ${waiting} 个，处理中 ${active} 个，预计等待约 ${etaSeconds} 秒`,
-          en: `Queue waiting: ${waiting}, active: ${active}, ETA ~${etaSeconds}s`,
-        })
-      )
 
       const imageUrl = await pollTryOnJob(jobResp.queue, jobResp.jobId)
       if (!imageUrl) {
@@ -519,14 +568,9 @@ export default function PreviewPage() {
         back: next.back,
         createdAt: Date.now(),
       }
-      try {
-        window.localStorage.setItem(TRYON_CACHE_STORAGE_KEY, JSON.stringify(cache))
-      } catch {
-        // ignore
-      }
+      writeTryOnCache(cache)
     } catch (error) {
       setTryOnError(error instanceof Error ? error.message : "试穿失败")
-      setTryOnQueueHint(null)
     } finally {
       setIsTryOnLoading(false)
     }
@@ -581,12 +625,7 @@ export default function PreviewPage() {
       }
 
       const getTryOnCache = () => {
-        try {
-          const raw = window.localStorage.getItem(TRYON_CACHE_STORAGE_KEY)
-          return (raw ? (JSON.parse(raw) as TryOnCache) : null) as TryOnCache | null
-        } catch {
-          return null
-        }
+        return readTryOnCache()
       }
 
       let cache = getTryOnCache()
@@ -666,133 +705,6 @@ export default function PreviewPage() {
       alert(translate({ zh: "下单失败，请重试", en: "Failed to place order. Please try again." }))
     } finally {
       setIsSubmitting(false)
-    }
-  }
-
-  const addToCart = async () => {
-    if (!designData) return
-
-    const token =
-      (typeof window !== "undefined" &&
-        (localStorage.getItem("authToken") || localStorage.getItem("token"))) ||
-      null
-    if (!token) {
-      alert(translate({ zh: "请先登录后再加入购物车", en: "Please log in before adding to cart" }))
-      router.push("/auth")
-      return
-    }
-
-    try {
-      setIsAddingToCart(true)
-
-      const [frontSnapshot, backSnapshot] = await Promise.all([
-        renderSnapshot("front"),
-        renderSnapshot("back"),
-      ])
-
-      const canvasForSave: CanvasMeta = {
-        ...resolvedCanvasMeta,
-        snapshots: { front: frontSnapshot, back: backSnapshot },
-      }
-
-      const category = (() => {
-        if (typeof designData?.category === "string" && designData.category.trim().length > 0) {
-          return designData.category.trim()
-        }
-        try {
-          const raw = window.localStorage.getItem("designCategory")
-          return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null
-        } catch {
-          return null
-        }
-      })()
-
-      await apiClient.addCartItem({
-        items: designData.elements,
-        selections: designData.selections,
-        design: { ...designData, canvas: canvasForSave },
-        quantity: 1,
-        price: Number(designData.selections?.price ?? 0),
-        category,
-        canvas: {
-          frontSnapshot: frontSnapshot ?? null,
-          backSnapshot: backSnapshot ?? null,
-          meta: resolvedCanvasMeta,
-        },
-        publishToAll: true,
-        sourceAllId: null,
-      })
-
-      alert(translate({ zh: "已加入购物车", en: "Added to cart" }))
-      router.push("/cart")
-    } catch (error) {
-      console.error("Add to cart failed", error)
-      alert(translate({ zh: "加入购物车失败，请重试", en: "Failed to add to cart. Please try again." }))
-    } finally {
-      setIsAddingToCart(false)
-    }
-  }
-
-  const addToCart = async () => {
-    if (!designData) return
-
-    const token =
-      (typeof window !== "undefined" &&
-        (localStorage.getItem("authToken") || localStorage.getItem("token"))) ||
-      null
-    if (!token) {
-      alert(translate({ zh: "请先登录后再加入购物车", en: "Please log in before adding to cart" }))
-      router.push("/auth")
-      return
-    }
-
-    try {
-      setIsAddingToCart(true)
-
-      const [frontSnapshot, backSnapshot] = await Promise.all([
-        renderSnapshot("front"),
-        renderSnapshot("back"),
-      ])
-
-      const canvasForSave: CanvasMeta = {
-        ...resolvedCanvasMeta,
-        snapshots: { front: frontSnapshot, back: backSnapshot },
-      }
-
-      const category = (() => {
-        if (typeof designData?.category === "string" && designData.category.trim().length > 0) {
-          return designData.category.trim()
-        }
-        try {
-          const raw = window.localStorage.getItem("designCategory")
-          return typeof raw === "string" && raw.trim().length > 0 ? raw.trim() : null
-        } catch {
-          return null
-        }
-      })()
-
-      await apiClient.addCartItem({
-        items: designData.elements,
-        selections: designData.selections,
-        design: { ...designData, canvas: canvasForSave },
-        category,
-        canvas: {
-          frontSnapshot: frontSnapshot,
-          backSnapshot: backSnapshot,
-          meta: resolvedCanvasMeta,
-        },
-        quantity: 1,
-        price: estimatedTotal,
-        publishToAll: true,
-        sourceAllId: null,
-      })
-
-      router.push("/cart")
-    } catch (error) {
-      console.error("Add to cart failed:", error)
-      alert(translate({ zh: "加入购物车失败，请重试", en: "Failed to add to cart. Please try again." }))
-    } finally {
-      setIsAddingToCart(false)
     }
   }
 
@@ -1025,12 +937,6 @@ export default function PreviewPage() {
                         </div>
                       ) : null}
 
-                      {isTryOnLoading && tryOnQueueHint ? (
-                        <div className="absolute bottom-10 left-2 right-2 text-xs text-muted-foreground bg-background/80 border border-border rounded px-2 py-1">
-                          {tryOnQueueHint}
-                        </div>
-                      ) : null}
-
                       {!tryOnEnabled && !isTryOnLoading ? (
                         <div className="absolute bottom-2 left-2 right-2 text-xs text-muted-foreground bg-background/80 border border-border rounded px-2 py-1">
                           {translate({ zh: "点击画布生成模特试穿效果", en: "Click to generate try-on" })}
@@ -1214,16 +1120,6 @@ export default function PreviewPage() {
                       {translate({ zh: "导出", en: "Export" })}
                     </Button>
                   </div>
-                  <Button
-                    onClick={addToCart}
-                    variant="outline"
-                    disabled={isAddingToCart}
-                    className="w-full bg-transparent"
-                  >
-                    {isAddingToCart
-                      ? translate({ zh: "加入中...", en: "Adding..." })
-                      : translate({ zh: "加入购物车", en: "Add to Cart" })}
-                  </Button>
                   <Button onClick={placeOrder} size="lg" className="w-full" disabled={isSubmitting}>
                     <ShoppingCart className="w-5 h-5 mr-2" />
                     {isSubmitting
@@ -1232,16 +1128,6 @@ export default function PreviewPage() {
                           zh: `下单 - $${estimatedTotal.toFixed(2)}`,
                           en: `Place Order - $${estimatedTotal.toFixed(2)}`,
                         })}
-                  </Button>
-                  <Button
-                    onClick={addToCart}
-                    variant="outline"
-                    className="w-full bg-transparent"
-                    disabled={isAddingToCart}
-                  >
-                    {isAddingToCart
-                      ? translate({ zh: "加入中...", en: "Adding..." })
-                      : translate({ zh: "加入购物车", en: "Add to cart" })}
                   </Button>
                   <p className="text-xs text-muted-foreground text-center">
                     {translate({

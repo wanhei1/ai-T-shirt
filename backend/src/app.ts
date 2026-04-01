@@ -332,8 +332,11 @@ const initializeApp = async () => {
             // Ensure balance exists for older installations.
             try {
                 await pool.query(`ALTER TABLE memberships ADD COLUMN IF NOT EXISTS balance NUMERIC(10,2) NOT NULL DEFAULT 0`);
+                await pool.query(`ALTER TABLE memberships ADD COLUMN IF NOT EXISTS raw_payload JSONB`);
+                await pool.query(`ALTER TABLE memberships ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`);
+                await pool.query(`UPDATE memberships SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)`);
             } catch (err) {
-                console.warn('⚠️ Failed to ensure memberships.balance column:', (err as any)?.message || err);
+                console.warn('⚠️ Failed to ensure memberships backward-compatible columns:', (err as any)?.message || err);
             }
             await pool.query(`
                 CREATE INDEX IF NOT EXISTS idx_memberships_user_id ON memberships(user_id)

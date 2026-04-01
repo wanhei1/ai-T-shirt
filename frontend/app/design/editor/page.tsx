@@ -80,50 +80,74 @@ type TryOnCache = {
   createdAt: number
 }
 
+const readTryOnCache = (): TryOnCache | null => {
+  if (typeof window === "undefined") return null
+  const read = (storage: Storage) => {
+    try {
+      const raw = storage.getItem(TRYON_CACHE_STORAGE_KEY)
+      return raw ? (JSON.parse(raw) as TryOnCache) : null
+    } catch {
+      return null
+    }
+  }
+  return read(window.localStorage) || read(window.sessionStorage)
+}
+
+const writeTryOnCache = (cache: TryOnCache): void => {
+  if (typeof window === "undefined") return
+  const raw = JSON.stringify(cache)
+  try {
+    window.localStorage.setItem(TRYON_CACHE_STORAGE_KEY, raw)
+    return
+  } catch {
+    // localStorage may exceed quota for large data URL payloads
+  }
+  try {
+    window.sessionStorage.setItem(TRYON_CACHE_STORAGE_KEY, raw)
+  } catch {
+    // ignore storage failures
+  }
+}
+
+const removeTryOnCache = (): void => {
+  if (typeof window === "undefined") return
+  try {
+    window.localStorage.removeItem(TRYON_CACHE_STORAGE_KEY)
+  } catch {
+    // ignore
+  }
+  try {
+    window.sessionStorage.removeItem(TRYON_CACHE_STORAGE_KEY)
+  } catch {
+    // ignore
+  }
+}
+
+const stableStringify = (value: unknown): string => {
+  const sortRecursively = (input: unknown): unknown => {
+    if (Array.isArray(input)) {
+      return input.map(sortRecursively)
+    }
+    if (input && typeof input === "object") {
+      const obj = input as Record<string, unknown>
+      const sortedKeys = Object.keys(obj).sort((a, b) => a.localeCompare(b))
+      const sorted: Record<string, unknown> = {}
+      for (const key of sortedKeys) {
+        sorted[key] = sortRecursively(obj[key])
+      }
+      return sorted
+    }
+    return input
+  }
+
+  return JSON.stringify(sortRecursively(value))
+}
+
 const getTryOnModelSrc = (gender: TryOnModelGender, side: "front" | "back") => {
   if (gender === "female") {
     return side === "back" ? "/femalemodelback.png" : "/femalemodel.png"
   }
   return side === "back" ? "/malemodelback.jpg" : "/malemodel.png"
-}
-
-const MODEL_CROP_RATIO = 0.6
-
-const cropModelToUpperBody = async (file: File): Promise<File> => {
-  if (typeof window === "undefined") return file
-
-  const img = await new Promise<HTMLImageElement>((resolve, reject) => {
-    const url = URL.createObjectURL(file)
-    const image = new window.Image()
-    image.onload = () => {
-      URL.revokeObjectURL(url)
-      resolve(image)
-    }
-    image.onerror = () => {
-      URL.revokeObjectURL(url)
-      reject(new Error("Failed to load model image"))
-    }
-    image.src = url
-  })
-
-  const width = img.naturalWidth || img.width
-  const height = img.naturalHeight || img.height
-  const cropHeight = Math.max(1, Math.round(height * MODEL_CROP_RATIO))
-
-  const canvas = document.createElement("canvas")
-  canvas.width = width
-  canvas.height = cropHeight
-  const ctx = canvas.getContext("2d")
-  if (!ctx) return file
-
-  ctx.drawImage(img, 0, 0, width, cropHeight, 0, 0, width, cropHeight)
-
-  const blob = await new Promise<Blob | null>((resolve) => {
-    canvas.toBlob(resolve, file.type || "image/png")
-  })
-  if (!blob) return file
-
-  return new File([blob], file.name, { type: blob.type || file.type || "image/png" })
 }
 
 export default function DesignEditorPage() {
@@ -179,7 +203,6 @@ export default function DesignEditorPage() {
 
   const [isContinuingToPreview, setIsContinuingToPreview] = useState(false)
   const [continuePercent, setContinuePercent] = useState(0)
-  const [continueQueueHint, setContinueQueueHint] = useState<string | null>(null)
 
   useEffect(() => {
     if (typeof window === "undefined") return
@@ -247,8 +270,56 @@ export default function DesignEditorPage() {
     canvas.height = height
     const ctx = canvas.getContext("2d")
     if (!ctx) return dataUrl
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height)
+
+    // Keep aspect ratio to avoid stretching garments/person, which can break try-on quality.
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+    ctx.fillStyle = "#ffffff"
+    ctx.fillRect(0, 0, canvas.width, canvas.height)
+
+    const scale = Math.min(canvas.width / img.width, canvas.height / img.height)
+    const drawWidth = Math.max(1, Math.round(img.width * scale))
+    const drawHeight = Math.max(1, Math.round(img.height * scale))
+    const offsetX = Math.floor((canvas.width - drawWidth) / 2)
+    const offsetY = Math.floor((canvas.height - drawHeight) / 2)
+    ctx.drawImage(img, offsetX, offsetY, drawWidth, drawHeight)
+
     return canvas.toDataURL("image/png")
+  }
+
+  const cropModelToUpperBody = async (dataUrl: string, side: "front" | "back"): Promise<string> => {
+    const img = await loadImage(dataUrl)
+    const width = img.naturalWidth || img.width
+    const height = img.naturalHeight || img.height
+
+    // Keep front/back preprocessing consistent so back side follows front logic.
+    const ratio = 0.66
+    const cropHeight = Math.max(1, Math.round(height * ratio))
+
+    const canvas = document.createElement("canvas")
+    canvas.width = width
+    canvas.height = cropHeight
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return dataUrl
+
+    ctx.drawImage(img, 0, 0, width, cropHeight, 0, 0, width, cropHeight)
+    return canvas.toDataURL("image/png")
+  }
+
+  const compressTryOnDataUrl = async (dataUrl: string): Promise<string> => {
+    const img = await loadImage(dataUrl)
+    const maxWidth = 512
+    const maxHeight = 768
+    const ratio = Math.min(maxWidth / img.width, maxHeight / img.height, 1)
+    const width = Math.max(1, Math.round(img.width * ratio))
+    const height = Math.max(1, Math.round(img.height * ratio))
+
+    const canvas = document.createElement("canvas")
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return dataUrl
+    ctx.drawImage(img, 0, 0, width, height)
+    return canvas.toDataURL("image/jpeg", 0.82)
   }
 
   const renderClothSnapshot = async (side: "front" | "back") => {
@@ -337,6 +408,7 @@ export default function DesignEditorPage() {
 
   const renderTryOnClothSnapshot = async (side: "front" | "back") => {
     const meta = canvasMeta
+    const sideElements = (designElements || []).filter((el) => el.visible && el.side === side)
 
     // Prefer rendering try-on cloth on the base shirt image at its native size.
     // Keep background transparent to better match typical backend cloth inputs.
@@ -345,6 +417,17 @@ export default function DesignEditorPage() {
     }
 
     const base = await loadImage(shirtPhotoSrc)
+    if (side === "back" && sideElements.length === 0) {
+      const photoCanvas = document.createElement("canvas")
+      photoCanvas.width = base.naturalWidth || base.width
+      photoCanvas.height = base.naturalHeight || base.height
+      const photoCtx = photoCanvas.getContext("2d")
+      if (!photoCtx) return null
+      photoCtx.drawImage(base, 0, 0, photoCanvas.width, photoCanvas.height)
+      // Use photo-like cloth for empty back side to avoid center print-area artifacts.
+      return photoCanvas.toDataURL("image/jpeg", 0.95)
+    }
+
     const baseWidth = base.naturalWidth || base.width
     const baseHeight = base.naturalHeight || base.height
 
@@ -366,8 +449,7 @@ export default function DesignEditorPage() {
     ctx.rect(0, 0, meta.printArea.width * sx, meta.printArea.height * sy)
     ctx.clip()
 
-    const elements = (designElements || []).filter((el) => el.visible && el.side === side)
-    for (const element of elements) {
+    for (const element of sideElements) {
       ctx.save()
       ctx.translate((element.x + element.width / 2) * sx, (element.y + element.height / 2) * sy)
       ctx.rotate((element.rotation * Math.PI) / 180)
@@ -419,7 +501,7 @@ export default function DesignEditorPage() {
       elements: normElements,
       gender: tryOnModelGender,
     }
-    return JSON.stringify(sigObj)
+    return stableStringify(sigObj)
   }
 
   const loadModelFile = async (src: string) => {
@@ -429,13 +511,13 @@ export default function DesignEditorPage() {
     }
     const blob = await resp.blob()
     const filename = src.split("/").pop() || "model.png"
-    const file = new File([blob], filename, { type: blob.type || "image/png" })
-    return cropModelToUpperBody(file)
+    return new File([blob], filename, { type: blob.type || "image/png" })
   }
 
   const callVirtualTryOn = async (person: File, clothDataUrl: string, side: "front" | "back") => {
     const personDataUrl = await readBlobAsDataUrl(person)
-    const resizedPersonDataUrl = await resizeDataUrlToTarget(personDataUrl)
+    const personTorsoDataUrl = await cropModelToUpperBody(personDataUrl, side)
+    const resizedPersonDataUrl = await resizeDataUrlToTarget(personTorsoDataUrl)
 
     const resizedClothDataUrl = await resizeDataUrlToTarget(clothDataUrl)
 
@@ -444,17 +526,9 @@ export default function DesignEditorPage() {
       payload: {
         personDataUrl: resizedPersonDataUrl,
         clothDataUrl: resizedClothDataUrl,
+        clothType: "upper",
       },
     })
-
-    const waiting = jobResp.queueStats?.waiting ?? 0
-    const active = jobResp.queueStats?.active ?? 0
-    setContinueQueueHint(
-      translate({
-        zh: `试穿队列：等待 ${waiting} 个，处理中 ${active} 个`,
-        en: `Try-on queue: waiting ${waiting}, active ${active}`,
-      })
-    )
 
     const imageUrl = await pollTryOnJob(jobResp.queue, jobResp.jobId)
     if (!imageUrl) {
@@ -643,6 +717,7 @@ export default function DesignEditorPage() {
     }
 
     persistTimerRef.current = window.setTimeout(async () => {
+      const signature = computeTryOnSignature()
       const sides = {
         front: designElements.filter((el) => el.side === "front"),
         back: designElements.filter((el) => el.side === "back"),
@@ -657,8 +732,9 @@ export default function DesignEditorPage() {
       })()
       const designData = {
         category,
-        selections,
+        selections: selections || { style: "classic", color: "white", size: "M", price: 188 },
         elements: designElements,
+        tryOnSignature: signature,
         sides,
         canvas: { ...canvasMeta },
       }
@@ -671,13 +747,9 @@ export default function DesignEditorPage() {
 
       // Invalidate try-on cache when the design changes.
       try {
-        const signature = computeTryOnSignature()
-        const raw = window.localStorage.getItem(TRYON_CACHE_STORAGE_KEY)
-        if (raw) {
-          const cached = JSON.parse(raw) as TryOnCache
-          if (!cached || cached.signature !== signature) {
-            window.localStorage.removeItem(TRYON_CACHE_STORAGE_KEY)
-          }
+        const cached = readTryOnCache()
+        if (cached && cached.signature !== signature) {
+          removeTryOnCache()
         }
       } catch {
         // ignore storage failures
@@ -926,7 +998,6 @@ export default function DesignEditorPage() {
     if (isContinuingToPreview) return
     setIsContinuingToPreview(true)
     setContinuePercent(1)
-    setContinueQueueHint(null)
 
     const bumpTo = (max: number) => {
       if (continueProgressTimerRef.current) {
@@ -945,14 +1016,7 @@ export default function DesignEditorPage() {
       bumpTo(20)
 
       const signature = computeTryOnSignature()
-      const cachedRaw = (() => {
-        try {
-          return window.localStorage.getItem(TRYON_CACHE_STORAGE_KEY)
-        } catch {
-          return null
-        }
-      })()
-      const cached = (cachedRaw ? (JSON.parse(cachedRaw) as TryOnCache) : null) as TryOnCache | null
+      const cached = readTryOnCache()
 
       // Always persist design data for preview.
       const category = (() => {
@@ -965,8 +1029,9 @@ export default function DesignEditorPage() {
       })()
       const designData = {
         category,
-        selections,
+        selections: selections || { style: "classic", color: "white", size: "M", price: 188 },
         elements: designElements,
+        tryOnSignature: signature,
         sides: {
           front: designElements.filter((el) => el.side === "front"),
           back: designElements.filter((el) => el.side === "back"),
@@ -1024,15 +1089,11 @@ export default function DesignEditorPage() {
       const cache: TryOnCache = {
         signature,
         gender: tryOnModelGender,
-        front: tryOnFront,
-        back: tryOnBack,
+        front: await compressTryOnDataUrl(tryOnFront),
+        back: await compressTryOnDataUrl(tryOnBack),
         createdAt: Date.now(),
       }
-      try {
-        window.localStorage.setItem(TRYON_CACHE_STORAGE_KEY, JSON.stringify(cache))
-      } catch {
-        // ignore storage failures
-      }
+      writeTryOnCache(cache)
 
       setContinuePercent(100)
       if (continueProgressTimerRef.current) {
@@ -1050,8 +1111,6 @@ export default function DesignEditorPage() {
         continueProgressTimerRef.current = null
       }
       return
-    } finally {
-      setContinueQueueHint(null)
     }
   }
 
@@ -1107,24 +1166,19 @@ export default function DesignEditorPage() {
               </div>
             </div>
 
-            <div className="flex flex-col items-end gap-1">
-              <Button onClick={handleContinueToPreview} disabled={designElements.length === 0 || isContinuingToPreview}>
-                {isContinuingToPreview ? (
-                  <div className="w-[220px] flex items-center gap-3">
-                    <Progress value={continuePercent} className="flex-1" />
-                    <span className="text-sm tabular-nums w-12 text-right">{continuePercent}%</span>
-                  </div>
-                ) : (
-                  <>
-                    {translate({ zh: "前往预览", en: "Continue to Preview" })}
-                    <ArrowRight className="w-4 h-4 ml-2" />
-                  </>
-                )}
-              </Button>
-              {isContinuingToPreview && continueQueueHint ? (
-                <span className="text-xs text-muted-foreground">{continueQueueHint}</span>
-              ) : null}
-            </div>
+            <Button onClick={handleContinueToPreview} disabled={designElements.length === 0 || isContinuingToPreview}>
+              {isContinuingToPreview ? (
+                <div className="w-[220px] flex items-center gap-3">
+                  <Progress value={continuePercent} className="flex-1" />
+                  <span className="text-sm tabular-nums w-12 text-right">{continuePercent}%</span>
+                </div>
+              ) : (
+                <>
+                  {translate({ zh: "前往预览", en: "Continue to Preview" })}
+                  <ArrowRight className="w-4 h-4 ml-2" />
+                </>
+              )}
+            </Button>
           </div>
         </div>
       </header>

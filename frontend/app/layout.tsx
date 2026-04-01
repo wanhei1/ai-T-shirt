@@ -14,6 +14,9 @@ export const metadata: Metadata = {
   description:
     "Create custom T-shirts with AI generation, text customization, and image uploads. Design your unique style today!",
   generator: "v0.app",
+  icons: {
+    icon: "/favicon.svg",
+  },
 };
 
 export default function RootLayout({
@@ -21,14 +24,16 @@ export default function RootLayout({
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  const enableVercelAnalytics = process.env.NEXT_PUBLIC_ENABLE_VERCEL_ANALYTICS === "true";
+
   return (
     <html lang="zh">
-      <body className="font-sans antialiased">
+      <body suppressHydrationWarning className="font-sans antialiased">
         <LanguageProvider>
           <AuthProvider>
             <Navbar />
             <Suspense fallback={<div>Loading...</div>}>{children}</Suspense>
-            <Analytics />
+            {enableVercelAnalytics ? <Analytics /> : null}
           </AuthProvider>
         </LanguageProvider>
       </body>

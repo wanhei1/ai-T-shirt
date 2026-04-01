@@ -6,6 +6,9 @@
   "scripts": {
     "start": "concurrently \"npm run start:backend\" \"npm run start:frontend\"",
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:infra": "cd backend && docker compose up -d",
+    "dev:full": "npm run dev:infra && concurrently -k -n comfyui,app -c magenta,cyan \"cd ComfyUI && python main.py --listen 0.0.0.0 --port 8188\" \"npm run dev\"",
+    "dev:full:stop": "cd backend && docker compose down",
     "dev:frontend": "cd frontend && npm run dev",
     "dev:backend": "cd backend && PORT=8185 npm run dev",
     "build": "npm run build:frontend && npm run build:backend",

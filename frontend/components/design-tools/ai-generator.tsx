@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
+import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -44,6 +45,7 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
   const [prompt, setPrompt] = useState("")
   const [style, setStyle] = useState("realistic")
   const [isGenerating, setIsGenerating] = useState(false)
+  const [showAdvanced, setShowAdvanced] = useState(false)
   const [generationProgress, setGenerationProgress] = useState("")
   const [queueHint, setQueueHint] = useState<string | null>(null)
   const [generationPercent, setGenerationPercent] = useState(0)
@@ -56,8 +58,130 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
     isPlaceholder?: boolean
     timestamp: number
   }>>([])
+  const [advanced, setAdvanced] = useState({
+    width: 768,
+    height: 768,
+    steps: 24,
+    cfg: 8,
+    seed: "",
+    denoise: 1,
+    modelName: "dreamshaper_8.safetensors",
+    samplerName: "euler",
+    scheduler: "normal",
+    negativePrompt: "",
+  })
 
   const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+
+  const loadImage = (src: string) =>
+    new Promise<HTMLImageElement>((resolve, reject) => {
+      const img = new Image()
+      img.crossOrigin = "anonymous"
+      img.onload = () => resolve(img)
+      img.onerror = () => reject(new Error("Failed to load generated image"))
+      img.src = src
+    })
+
+  const removeBackgroundToTransparent = async (src: string): Promise<string> => {
+    const img = await loadImage(src)
+    const width = img.naturalWidth || img.width
+    const height = img.naturalHeight || img.height
+
+    const canvas = document.createElement("canvas")
+    canvas.width = width
+    canvas.height = height
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return src
+
+    ctx.drawImage(img, 0, 0, width, height)
+    const imageData = ctx.getImageData(0, 0, width, height)
+    const data = imageData.data
+
+    const pick = (x: number, y: number) => {
+      const i = (y * width + x) * 4
+      return [data[i], data[i + 1], data[i + 2]] as const
+    }
+
+    const samples = [
+      pick(0, 0),
+      pick(width - 1, 0),
+      pick(0, height - 1),
+      pick(width - 1, height - 1),
+      pick(Math.floor(width / 2), 0),
+      pick(Math.floor(width / 2), height - 1),
+      pick(0, Math.floor(height / 2)),
+      pick(width - 1, Math.floor(height / 2)),
+    ]
+
+    const avg = samples.reduce(
+      (acc, [r, g, b]) => {
+        acc.r += r
+        acc.g += g
+        acc.b += b
+        return acc
+      },
+      { r: 0, g: 0, b: 0 }
+    )
+    const bg = {
+      r: avg.r / samples.length,
+      g: avg.g / samples.length,
+      b: avg.b / samples.length,
+    }
+
+    const colorDistance = (r: number, g: number, b: number) => {
+      const dr = r - bg.r
+      const dg = g - bg.g
+      const db = b - bg.b
+      return Math.sqrt(dr * dr + dg * dg + db * db)
+    }
+
+    const tolerance = 44
+    const visited = new Uint8Array(width * height)
+    const queue = new Uint32Array(width * height)
+    let head = 0
+    let tail = 0
+
+    const pushIfBg = (x: number, y: number) => {
+      if (x < 0 || y < 0 || x >= width || y >= height) return
+      const idx = y * width + x
+      if (visited[idx]) return
+      const i = idx * 4
+      const a = data[i + 3]
+      if (a === 0) {
+        visited[idx] = 1
+        return
+      }
+      if (colorDistance(data[i], data[i + 1], data[i + 2]) <= tolerance) {
+        visited[idx] = 1
+        queue[tail++] = idx
+      }
+    }
+
+    for (let x = 0; x < width; x += 1) {
+      pushIfBg(x, 0)
+      pushIfBg(x, height - 1)
+    }
+    for (let y = 0; y < height; y += 1) {
+      pushIfBg(0, y)
+      pushIfBg(width - 1, y)
+    }
+
+    while (head < tail) {
+      const idx = queue[head++]
+      const x = idx % width
+      const y = Math.floor(idx / width)
+      const i = idx * 4
+      data[i + 3] = 0
+
+      pushIfBg(x + 1, y)
+      pushIfBg(x - 1, y)
+      pushIfBg(x, y + 1)
+      pushIfBg(x, y - 1)
+    }
+
+    ctx.putImageData(imageData, 0, 0)
+    return canvas.toDataURL("image/png")
+  }
 
   const generateImage = async () => {
     if (!prompt.trim()) return
@@ -73,7 +197,20 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
 
       const jobResp = await apiClient.createJob({
         type: "ai-image",
-        payload: { prompt, style },
+        payload: {
+          prompt,
+          style,
+          width: advanced.width,
+          height: advanced.height,
+          steps: advanced.steps,
+          cfg: advanced.cfg,
+          denoise: advanced.denoise,
+          modelName: advanced.modelName,
+          samplerName: advanced.samplerName,
+          scheduler: advanced.scheduler,
+          negativePrompt: advanced.negativePrompt || undefined,
+          seed: advanced.seed.trim() ? Number.parseInt(advanced.seed, 10) : undefined,
+        },
       })
 
       const queue = jobResp.queue
@@ -105,12 +242,15 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
             throw new Error("生成结果为空")
           }
 
+          setGenerationProgress("正在去除背景...")
+          const transparentImageUrl = await removeBackgroundToTransparent(imageUrl).catch(() => imageUrl)
+
           setErrorAction(null)
           setGenerationProgress("生成完成！")
           setGenerationPercent(100)
 
           const newImage = {
-            url: imageUrl,
+            url: transparentImageUrl,
             prompt,
             style,
             timestamp: Date.now(),
@@ -274,6 +414,116 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
                 ))}
               </SelectContent>
             </Select>
+          </div>
+
+          <div className="space-y-2">
+            <Button type="button" variant="outline" className="w-full" onClick={() => setShowAdvanced((v) => !v)}>
+              {showAdvanced
+                ? translate({ zh: "收起高级参数", en: "Hide Advanced Controls" })
+                : translate({ zh: "展开高级参数", en: "Show Advanced Controls" })}
+            </Button>
+
+            {showAdvanced ? (
+              <div className="grid grid-cols-2 gap-3 rounded-md border p-3">
+                <div>
+                  <Label>Width</Label>
+                  <Input
+                    type="number"
+                    min={256}
+                    max={1536}
+                    step={64}
+                    value={advanced.width}
+                    onChange={(e) => setAdvanced((prev) => ({ ...prev, width: Number.parseInt(e.target.value || "768", 10) }))}
+                  />
+                </div>
+                <div>
+                  <Label>Height</Label>
+                  <Input
+                    type="number"
+                    min={256}
+                    max={1536}
+                    step={64}
+                    value={advanced.height}
+                    onChange={(e) => setAdvanced((prev) => ({ ...prev, height: Number.parseInt(e.target.value || "768", 10) }))}
+                  />
+                </div>
+                <div>
+                  <Label>Steps</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={80}
+                    value={advanced.steps}
+                    onChange={(e) => setAdvanced((prev) => ({ ...prev, steps: Number.parseInt(e.target.value || "24", 10) }))}
+                  />
+                </div>
+                <div>
+                  <Label>CFG</Label>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={20}
+                    step={0.5}
+                    value={advanced.cfg}
+                    onChange={(e) => setAdvanced((prev) => ({ ...prev, cfg: Number.parseFloat(e.target.value || "8") }))}
+                  />
+                </div>
+                <div>
+                  <Label>Denoise</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={1}
+                    step={0.05}
+                    value={advanced.denoise}
+                    onChange={(e) => setAdvanced((prev) => ({ ...prev, denoise: Number.parseFloat(e.target.value || "1") }))}
+                  />
+                </div>
+                <div>
+                  <Label>Seed</Label>
+                  <Input
+                    type="text"
+                    placeholder={translate({ zh: "留空随机", en: "Blank for random" })}
+                    value={advanced.seed}
+                    onChange={(e) => setAdvanced((prev) => ({ ...prev, seed: e.target.value.replace(/[^0-9]/g, "") }))}
+                  />
+                </div>
+                <div>
+                  <Label>Sampler</Label>
+                  <Input
+                    type="text"
+                    value={advanced.samplerName}
+                    onChange={(e) => setAdvanced((prev) => ({ ...prev, samplerName: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <Label>Scheduler</Label>
+                  <Input
+                    type="text"
+                    value={advanced.scheduler}
+                    onChange={(e) => setAdvanced((prev) => ({ ...prev, scheduler: e.target.value }))}
+                  />
+                </div>
+                <div className="col-span-2">
+                  <Label>Model</Label>
+                  <Input
+                    type="text"
+                    value={advanced.modelName}
+                    onChange={(e) => setAdvanced((prev) => ({ ...prev, modelName: e.target.value }))}
+                  />
+                </div>
+                <div className="col-span-2">
+                  <Label>
+                    {translate({ zh: "负向提示词（可选）", en: "Negative Prompt (Optional)" })}
+                  </Label>
+                  <Input
+                    type="text"
+                    value={advanced.negativePrompt}
+                    onChange={(e) => setAdvanced((prev) => ({ ...prev, negativePrompt: e.target.value }))}
+                  />
+                </div>
+              </div>
+            ) : null}
           </div>
 
           <Button onClick={generateImage} disabled={!prompt.trim() || isGenerating} className="w-full">

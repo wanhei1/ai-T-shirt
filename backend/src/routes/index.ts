@@ -19,6 +19,42 @@ import {
 export const createRoutes = (pool: Pool | null) => {
     const router = Router();
 
+    const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
+
+    const toOptionalString = (value: unknown): string | undefined => {
+        if (typeof value !== 'string') return undefined;
+        const trimmed = value.trim();
+        return trimmed.length > 0 ? trimmed : undefined;
+    };
+
+    const toOptionalNumber = (value: unknown): number | undefined => {
+        if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+        return value;
+    };
+
+    const parseAiGenerationOptions = (input: any) => {
+        const widthRaw = toOptionalNumber(input?.width);
+        const heightRaw = toOptionalNumber(input?.height);
+        const stepsRaw = toOptionalNumber(input?.steps);
+        const cfgRaw = toOptionalNumber(input?.cfg);
+        const seedRaw = toOptionalNumber(input?.seed);
+        const denoiseRaw = toOptionalNumber(input?.denoise);
+
+        return {
+            style: toOptionalString(input?.style),
+            width: widthRaw !== undefined ? clamp(Math.round(widthRaw), 256, 1536) : undefined,
+            height: heightRaw !== undefined ? clamp(Math.round(heightRaw), 256, 1536) : undefined,
+            steps: stepsRaw !== undefined ? clamp(Math.round(stepsRaw), 1, 80) : undefined,
+            cfg: cfgRaw !== undefined ? clamp(cfgRaw, 1, 20) : undefined,
+            seed: seedRaw !== undefined ? Math.max(0, Math.round(seedRaw)) : undefined,
+            denoise: denoiseRaw !== undefined ? clamp(denoiseRaw, 0, 1) : undefined,
+            modelName: toOptionalString(input?.modelName),
+            samplerName: toOptionalString(input?.samplerName),
+            scheduler: toOptionalString(input?.scheduler),
+            negativePrompt: toOptionalString(input?.negativePrompt)
+        };
+    };
+
     // 如果没有数据库连接，则返回服务不可用的路由
     if (!pool) {
         router.use((req, res) => {
@@ -188,19 +224,19 @@ export const createRoutes = (pool: Pool | null) => {
                 });
             }
 
-            const { prompt, style, width, height } = req.body || {};
+            const { prompt } = req.body || {};
             if (!prompt || typeof prompt !== 'string') {
                 return res.status(400).json({ message: 'Prompt is required' });
             }
+
+            const generationOptions = parseAiGenerationOptions(req.body);
 
             const job = await enqueueJob(
                 AI_QUEUE_NAME,
                 {
                     userId: req.userId,
                     prompt: prompt.trim(),
-                    style: typeof style === 'string' ? style : undefined,
-                    width: typeof width === 'number' ? width : undefined,
-                    height: typeof height === 'number' ? height : undefined
+                    ...generationOptions
                 },
                 buildJobOptions()
             );
@@ -248,9 +284,7 @@ export const createRoutes = (pool: Pool | null) => {
                     {
                         userId: req.userId,
                         prompt,
-                        style: typeof payload?.style === 'string' ? payload.style : undefined,
-                        width: typeof payload?.width === 'number' ? payload.width : undefined,
-                        height: typeof payload?.height === 'number' ? payload.height : undefined
+                        ...parseAiGenerationOptions(payload)
                     },
                     buildJobOptions()
                 );

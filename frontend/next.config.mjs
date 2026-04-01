@@ -11,6 +11,15 @@ const nextConfig = {
   images: {
     unoptimized: true,
   },
+  async rewrites() {
+    const backendTarget = process.env.NEXT_INTERNAL_API_PROXY || "http://127.0.0.1:8185";
+    return [
+      {
+        source: "/backend/:path*",
+        destination: `${backendTarget}/:path*`,
+      },
+    ];
+  },
 }
 
 export default nextConfig

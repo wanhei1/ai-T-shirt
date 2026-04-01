@@ -9,11 +9,20 @@ import { useRouter } from "next/navigation";
 type AuthMode = "login" | "register";
 
 export default function AuthPage() {
+  const [isMounted, setIsMounted] = useState(false);
   const [authMode, setAuthMode] = useState<AuthMode>("login");
-  const { user } = useAuth();
+  const { user, isLoading } = useAuth();
   const router = useRouter();
 
   useEffect(() => {
+    setIsMounted(true);
+  }, []);
+
+  useEffect(() => {
+    if (!isMounted || isLoading) {
+      return;
+    }
+
     if (user) {
       if ((user as any)?.is_admin) {
         router.push("/admin");
@@ -21,10 +30,11 @@ export default function AuthPage() {
         router.push("/");
       }
     }
-  }, [user, router]);
+  }, [isMounted, isLoading, user, router]);
 
-  if (user) {
-    return null; // 或者显示加载状态
+  // Keep first frame deterministic to prevent hydration mismatch.
+  if (!isMounted || isLoading || user) {
+    return null;
   }
 
   return (
