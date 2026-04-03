@@ -1,7 +1,9 @@
+import os
+os.environ.setdefault("SETUPTOOLS_USE_DISTUTILS", "stdlib")
+
 import comfy.options
 comfy.options.enable_args_parsing()
 
-import os
 import importlib.util
 import folder_paths
 import time

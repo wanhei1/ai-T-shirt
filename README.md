@@ -128,11 +128,16 @@ npm run dev:backend
 npm run build          # 前后端
 npm run build:frontend
 npm run build:backend
+
+# 启动高可用拓扑（2 API + 2 Worker + LB）
+npm run dev:infra:ha
 ```
 
 默认端口：Frontend http://localhost:3000，Backend http://localhost:8189。
 
-## 🔌 REST API 摘要
+高可用拓扑下的负载均衡入口同样是 `http://localhost:8189`，并新增就绪探针 `GET /health/ready` 用于实例摘除与流量切换。
+
+##  REST API 摘要
 
 | 方法 | 路径 | 描述 |
 | ---- | ---- | ---- |

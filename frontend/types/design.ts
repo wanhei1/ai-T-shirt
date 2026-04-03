@@ -29,6 +29,7 @@ export type CanvasMeta = {
   printArea: { x: number; y: number; width: number; height: number }
   backgroundColor: string
   snapshots?: { front?: string | null; back?: string | null }
+  elementSnapshots?: { front?: string | null; back?: string | null }
 }
 
 export type DesignData = {

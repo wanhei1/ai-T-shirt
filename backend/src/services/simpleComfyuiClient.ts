@@ -111,7 +111,7 @@ export class SimpleComfyUIClient {
     const allUrls = [...urlsFromConfig, ...defaultLocalUrls];
     this.fallbackUrls = Array.from(new Set(allUrls));
 
-    this.defaultModelName = process.env.COMFYUI_MODEL_NAME || "dreamshaper_8.safetensors";
+    this.defaultModelName = process.env.COMFYUI_MODEL_NAME || "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors";
     this.defaultSamplerName = process.env.COMFYUI_DEFAULT_SAMPLER || "euler";
     this.defaultScheduler = process.env.COMFYUI_DEFAULT_SCHEDULER || "normal";
     this.defaultSteps = Number.parseInt(process.env.COMFYUI_DEFAULT_STEPS || "24", 10);

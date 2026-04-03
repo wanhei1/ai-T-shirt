@@ -7,6 +7,11 @@ import { normalizeCategory } from '../utils/category';
 import { categoryAliases } from '../utils/category';
 import { randomUUID } from 'crypto';
 import { hashPassword } from '../utils';
+import { createRateLimiter } from '../utils/rate-limit';
+import { incrementCounter, setGauge } from '../observability/metrics';
+import { createCacheStore } from '../utils/cache';
+import { logError, logWarn } from '../utils/structured-logger';
+import { externalizeImageDataUrls, type StoredAssetRef } from '../utils/asset-storage';
 import {
     enqueueJob,
     getQueueByName,
@@ -16,8 +21,43 @@ import {
     getJobById,
 } from '../queue/queues';
 
-export const createRoutes = (pool: Pool | null) => {
+export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
     const router = Router();
+
+    const sendError = (res: any, status: number, code: string, message: string, details?: unknown) => {
+        const req = res.req as any;
+        const route = req?.route?.path || req?.path || req?.originalUrl || 'unknown';
+        const detailsObj = details && typeof details === 'object' ? details as Record<string, unknown> : null;
+        const queue = typeof detailsObj?.queue === 'string' ? detailsObj.queue : undefined;
+        const detailJobId = typeof detailsObj?.jobId === 'string' ? detailsObj.jobId : undefined;
+        const paramJobId = typeof req?.params?.id === 'string' ? req.params.id : undefined;
+        const bodyJobId = typeof req?.body?.jobId === 'string' ? req.body.jobId : undefined;
+        const jobId = detailJobId || paramJobId || bodyJobId;
+
+        incrementCounter('api_errors_total', {
+            code,
+            status,
+            route,
+        });
+
+        logWarn('api_error', {
+            requestId: res.locals?.requestId || null,
+            code,
+            status,
+            route,
+            method: req?.method || null,
+            queue: queue || null,
+            jobId: jobId || null,
+            details: details ?? null,
+        });
+
+        return res.status(status).json({
+            code,
+            message,
+            details: details ?? null,
+            requestId: res.locals?.requestId || null,
+        });
+    };
 
     const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
@@ -58,10 +98,7 @@ export const createRoutes = (pool: Pool | null) => {
     // 如果没有数据库连接，则返回服务不可用的路由
     if (!pool) {
         router.use((req, res) => {
-            res.status(503).json({
-                message: 'Database service is unavailable. Please configure DATABASE_URL.',
-                code: 'DB_CONNECTION_FAILED'
-            });
+            sendError(res, 503, 'DB_CONNECTION_FAILED', 'Database service is unavailable. Please configure DATABASE_URL.');
         });
         return router;
     }
@@ -69,9 +106,134 @@ export const createRoutes = (pool: Pool | null) => {
     const userModel = new UserModel(pool);
     const authController = new AuthController(userModel);
     const orderModel = new OrderModel(pool);
+    const orderReadModel = new OrderModel(readPool || pool);
     const allDesignModel = new AllDesignModel(pool);
+    const allDesignReadModel = new AllDesignModel(readPool || pool);
     const membershipModel = new MembershipModel(pool);
+    const membershipReadModel = new MembershipModel(readPool || pool);
     const cartModel = new CartModel(pool);
+    const cartReadModel = new CartModel(readPool || pool);
+    const rateLimiter = createRateLimiter();
+    const cacheStore = createCacheStore();
+
+    const ttlFromEnv = (envName: string, fallbackSeconds: number, minSeconds = 5) => {
+        const raw = Number.parseInt(process.env[envName] || '', 10);
+        if (!Number.isFinite(raw)) {
+            return Math.max(minSeconds, fallbackSeconds);
+        }
+        return Math.max(minSeconds, raw);
+    };
+
+    const cacheTtl = {
+        galleryList: ttlFromEnv('GALLERY_CACHE_TTL_SECONDS', 30),
+        galleryItem: ttlFromEnv('GALLERY_ITEM_CACHE_TTL_SECONDS', 30),
+        membershipMe: ttlFromEnv('MEMBERSHIP_CACHE_TTL_SECONDS', 20),
+        membershipTransactions: ttlFromEnv('MEMBERSHIP_TRANSACTIONS_CACHE_TTL_SECONDS', 20),
+        cartList: ttlFromEnv('CART_CACHE_TTL_SECONDS', 15),
+        orderSummary: ttlFromEnv('ORDERS_SUMMARY_CACHE_TTL_SECONDS', 20),
+        orderList: ttlFromEnv('ORDERS_LIST_CACHE_TTL_SECONDS', 20),
+        adminOrders: ttlFromEnv('ADMIN_ORDERS_CACHE_TTL_SECONDS', 10),
+    };
+
+    const markCache = (route: string, result: 'hit' | 'miss' | 'store' | 'invalidate' | 'error') => {
+        incrementCounter('cache_requests_total', { route, result });
+    };
+
+    const readThroughCache = async <TPayload>(
+        route: string,
+        cacheKey: string,
+        ttlSeconds: number,
+        loader: () => Promise<TPayload>
+    ): Promise<TPayload> => {
+        try {
+            const cached = await cacheStore.get<TPayload>(cacheKey);
+            if (cached !== null) {
+                incrementCounter('cache_hits_total', { route });
+                markCache(route, 'hit');
+                return cached;
+            }
+
+            incrementCounter('cache_misses_total', { route });
+            incrementCounter('cache_backsource_total', { route });
+            markCache(route, 'miss');
+
+            const payload = await loader();
+            await cacheStore.set(cacheKey, payload, ttlSeconds);
+            markCache(route, 'store');
+            return payload;
+        } catch (error) {
+            markCache(route, 'error');
+            throw error;
+        }
+    };
+
+    const safeInvalidatePrefix = async (prefix: string, route: string) => {
+        try {
+            await cacheStore.deleteByPrefix(prefix);
+            markCache(route, 'invalidate');
+        } catch (error) {
+            markCache(route, 'error');
+            logWarn('cache_invalidation_failed', {
+                route,
+                prefix,
+                error,
+            });
+        }
+    };
+
+    const stableStringify = (input: unknown): string => {
+        if (input === null || typeof input !== 'object') {
+            return JSON.stringify(input);
+        }
+        if (Array.isArray(input)) {
+            return `[${input.map((item) => stableStringify(item)).join(',')}]`;
+        }
+
+        const obj = input as Record<string, unknown>;
+        const keys = Object.keys(obj).sort();
+        return `{${keys.map((key) => `${JSON.stringify(key)}:${stableStringify(obj[key])}`).join(',')}}`;
+    };
+
+    const invalidateMembershipCache = async (userId?: number | null) => {
+        if (!userId || !Number.isFinite(userId)) return;
+        await Promise.all([
+            safeInvalidatePrefix(`membership:me:${userId}:`, '/memberships/me'),
+            safeInvalidatePrefix(`membership:transactions:${userId}:`, '/memberships/transactions/me'),
+        ]);
+    };
+
+    const invalidateCartCache = async (userId?: number | null) => {
+        if (!userId || !Number.isFinite(userId)) return;
+        await safeInvalidatePrefix(`cart:list:${userId}:`, '/cart');
+    };
+
+    const invalidateOrderCache = async (userId?: number | null) => {
+        if (!userId || !Number.isFinite(userId)) return;
+        await Promise.all([
+            safeInvalidatePrefix(`orders:list:${userId}:`, '/orders'),
+            safeInvalidatePrefix(`orders:summary:${userId}:`, '/orders/summary'),
+        ]);
+    };
+
+    const invalidateAdminOrderCache = async () => {
+        await safeInvalidatePrefix('orders:admin:list:', '/admin/orders');
+    };
+
+    const invalidateGalleryCache = async (designId?: number | null) => {
+        await safeInvalidatePrefix('gallery:list:', '/gallery');
+        if (designId && Number.isFinite(designId)) {
+            await safeInvalidatePrefix(`gallery:item:${designId}`, '/gallery/:designId');
+        }
+    };
+
+    const mergeAssetRefs = (baseMeta: unknown, refs: StoredAssetRef[]) => {
+        const base = baseMeta && typeof baseMeta === 'object' ? baseMeta as Record<string, unknown> : {};
+        const existing = Array.isArray(base.assetRefs) ? base.assetRefs : [];
+        return {
+            ...base,
+            assetRefs: [...existing, ...refs],
+        };
+    };
 
     const getQueueStats = async (queueName: string) => {
         if (queueName !== AI_QUEUE_NAME && queueName !== TRYON_QUEUE_NAME) {
@@ -85,7 +247,14 @@ export const createRoutes = (pool: Pool | null) => {
             };
         }
 
-        return getQueueStatsByName(queueName);
+        const stats = await getQueueStatsByName(queueName);
+        setGauge('queue_depth', stats.waiting || 0, { queue: queueName, state: 'waiting' });
+        setGauge('queue_depth', stats.active || 0, { queue: queueName, state: 'active' });
+        setGauge('queue_depth', stats.completed || 0, { queue: queueName, state: 'completed' });
+        setGauge('queue_depth', stats.failed || 0, { queue: queueName, state: 'failed' });
+        setGauge('queue_depth', stats.delayed || 0, { queue: queueName, state: 'delayed' });
+        setGauge('queue_depth', stats.paused || 0, { queue: queueName, state: 'paused' });
+        return stats;
     };
 
     const buildJobOptions = () => {
@@ -102,15 +271,95 @@ export const createRoutes = (pool: Pool | null) => {
         };
     };
 
+    const getQueueThreshold = (queueName: string) => {
+        if (queueName === AI_QUEUE_NAME) {
+            return Math.max(1, Number.parseInt(process.env.AI_QUEUE_MAX_WAITING || '100', 10));
+        }
+        if (queueName === TRYON_QUEUE_NAME) {
+            return Math.max(1, Number.parseInt(process.env.TRYON_QUEUE_MAX_WAITING || '50', 10));
+        }
+        return Math.max(1, Number.parseInt(process.env.JOB_QUEUE_MAX_WAITING || '100', 10));
+    };
+
+    const assertQueueCapacity = async (queueName: typeof AI_QUEUE_NAME | typeof TRYON_QUEUE_NAME, res: any) => {
+        const stats = await getQueueStats(queueName);
+        const maxWaiting = getQueueThreshold(queueName);
+        if ((stats.waiting || 0) >= maxWaiting) {
+            incrementCounter('queue_overloaded_total', { queue: queueName });
+            const retryAfter = Math.max(5, Number.parseInt(process.env.JOB_OVERLOAD_RETRY_AFTER || '15', 10));
+            res.setHeader('Retry-After', String(retryAfter));
+            sendError(res, 503, 'QUEUE_OVERLOADED', 'Queue overloaded, please retry later', {
+                queue: queueName,
+                retryAfter,
+                queueStats: stats,
+            });
+            return false;
+        }
+        return true;
+    };
+
+    const getClientIp = (req: any) => {
+        const forwarded = req.headers?.['x-forwarded-for'];
+        if (typeof forwarded === 'string' && forwarded.trim().length > 0) {
+            return forwarded.split(',')[0].trim();
+        }
+        if (Array.isArray(forwarded) && forwarded.length > 0) {
+            return String(forwarded[0]).trim();
+        }
+        return req.ip || req.socket?.remoteAddress || 'unknown';
+    };
+
+    const assertRateLimit = async (
+        req: any,
+        res: any,
+        options: {
+            scope: string;
+            queue: typeof AI_QUEUE_NAME | typeof TRYON_QUEUE_NAME;
+            ipPerMinute: number;
+            userPerMinute?: number;
+        }
+    ) => {
+        const ip = getClientIp(req);
+        const ipKey = `ip:${options.scope}:${options.queue}:${ip}`;
+        const ipCheck = await rateLimiter.hit(ipKey, Math.max(1, options.ipPerMinute), 60_000);
+        if (!ipCheck.allowed) {
+            incrementCounter('rate_limited_total', { queue: options.queue, scope: 'ip' });
+            res.setHeader('Retry-After', String(ipCheck.retryAfterSeconds));
+            sendError(res, 429, 'RATE_LIMITED', 'Too many requests, please retry later', {
+                scope: 'ip',
+                queue: options.queue,
+                retryAfter: ipCheck.retryAfterSeconds,
+            });
+            return false;
+        }
+
+        if (options.userPerMinute && req.userId) {
+            const userKey = `user:${options.scope}:${options.queue}:${req.userId}`;
+            const userCheck = await rateLimiter.hit(userKey, Math.max(1, options.userPerMinute), 60_000);
+            if (!userCheck.allowed) {
+                incrementCounter('rate_limited_total', { queue: options.queue, scope: 'user' });
+                res.setHeader('Retry-After', String(userCheck.retryAfterSeconds));
+                sendError(res, 429, 'RATE_LIMITED', 'Too many requests, please retry later', {
+                    scope: 'user',
+                    queue: options.queue,
+                    retryAfter: userCheck.retryAfterSeconds,
+                });
+                return false;
+            }
+        }
+
+        return true;
+    };
+
     const requireAdmin = async (req: any, res: any) => {
         if (!req.userId) {
-            res.status(401).json({ message: 'User ID not found' });
+            sendError(res, 401, 'UNAUTHORIZED', 'User ID not found');
             return null;
         }
 
         const user = await userModel.findUserById(req.userId);
         if (!user || !(user as any).is_admin) {
-            res.status(403).json({ message: 'Admin access required' });
+            sendError(res, 403, 'FORBIDDEN', 'Admin access required');
             return null;
         }
 
@@ -139,10 +388,17 @@ export const createRoutes = (pool: Pool | null) => {
             const offset = req.query.offset ? Number(req.query.offset) : undefined;
             const category = typeof req.query.category === 'string' ? req.query.category : undefined;
             const sortRaw = typeof req.query.sort === 'string' ? req.query.sort : undefined;
-            const sort = sortRaw === 'sales' ? 'sales' : 'new';
+            const sort: 'new' | 'sales' = sortRaw === 'sales' ? 'sales' : 'new';
             const search = typeof req.query.search === 'string' ? req.query.search : undefined;
-            const designs = await allDesignModel.list({ limit, offset, category, sort, search });
-            res.json({ designs });
+
+            const queryPayload = { limit, offset, category, sort, search };
+            const cacheKey = `gallery:list:${stableStringify(queryPayload)}`;
+            const payload = await readThroughCache('/gallery', cacheKey, cacheTtl.galleryList, async () => {
+                const designs = await allDesignReadModel.list(queryPayload);
+                return { designs };
+            });
+
+            res.json(payload);
         } catch (error) {
             console.error('Get gallery error:', error);
             res.status(500).json({ message: 'Internal server error' });
@@ -170,14 +426,31 @@ export const createRoutes = (pool: Pool | null) => {
                 meta: canvas?.meta ?? design?.canvas ?? null
             };
 
+            const [designExternalized, selectionsExternalized, canvasExternalized] = await Promise.all([
+                externalizeImageDataUrls(design, { context: 'gallery-design' }),
+                externalizeImageDataUrls(selections, { context: 'gallery-selections' }),
+                externalizeImageDataUrls(canvasPayload, { context: 'gallery-canvas' }),
+            ]);
+
+            const canvasMeta = mergeAssetRefs(
+                canvasExternalized.value?.meta,
+                [...designExternalized.assets, ...selectionsExternalized.assets, ...canvasExternalized.assets]
+            );
+
             const created = await allDesignModel.createDesign({
                 userId: req.userId,
                 sourceOrderId: null,
                 category: normalizedCategory ?? null,
-                selections,
-                design,
-                canvas: canvasPayload
+                selections: selectionsExternalized.value,
+                design: designExternalized.value,
+                canvas: {
+                    frontSnapshot: canvasExternalized.value?.frontSnapshot ?? null,
+                    backSnapshot: canvasExternalized.value?.backSnapshot ?? null,
+                    meta: canvasMeta,
+                }
             });
+
+            await invalidateGalleryCache(created?.id ?? null);
 
             res.status(201).json({ design: created, allDesignId: created?.id ?? null });
         } catch (error) {
@@ -193,13 +466,35 @@ export const createRoutes = (pool: Pool | null) => {
                 return res.status(400).json({ message: 'Invalid designId' });
             }
 
-            const design = await allDesignModel.getById(designId);
+            const cacheKey = `gallery:item:${designId}`;
+            const cached = await cacheStore.get<{ design: unknown }>(cacheKey);
+            if (cached !== null) {
+                incrementCounter('cache_hits_total', { route: '/gallery/:designId' });
+                markCache('/gallery/:designId', 'hit');
+                return res.json(cached);
+            }
+
+            incrementCounter('cache_misses_total', { route: '/gallery/:designId' });
+            incrementCounter('cache_backsource_total', { route: '/gallery/:designId' });
+            markCache('/gallery/:designId', 'miss');
+
+            const design = await allDesignReadModel.getById(designId);
             if (!design) {
                 return res.status(404).json({ message: 'Not found' });
             }
-            res.json({ design });
+
+            const payload = { design };
+            await cacheStore.set(cacheKey, payload, cacheTtl.galleryItem);
+            markCache('/gallery/:designId', 'store');
+            res.json(payload);
         } catch (error) {
-            console.error('Get gallery item error:', error);
+            markCache('/gallery/:designId', 'error');
+            logError('gallery_item_failed', {
+                requestId: res.locals?.requestId || null,
+                route: '/gallery/:designId',
+                designId: req.params.designId,
+                error,
+            });
             res.status(500).json({ message: 'Internal server error' });
         }
     });
@@ -207,7 +502,7 @@ export const createRoutes = (pool: Pool | null) => {
     // AI 生成路由
     router.post('/generate', authenticate, async (req, res) => {
         try {
-            if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
+            if (!req.userId) return sendError(res, 401, 'UNAUTHORIZED', 'User ID not found');
 
             const membership = await membershipModel.getMembershipByUserId(req.userId);
             const expiresAt = membership?.expires_at ? new Date(membership.expires_at) : null;
@@ -218,16 +513,26 @@ export const createRoutes = (pool: Pool | null) => {
             );
 
             if (!isActive) {
-                return res.status(403).json({
-                    message: 'Active membership required',
-                    code: 'MEMBERSHIP_REQUIRED'
-                });
+                return sendError(res, 403, 'MEMBERSHIP_REQUIRED', 'Active membership required');
             }
 
             const { prompt } = req.body || {};
             if (!prompt || typeof prompt !== 'string') {
-                return res.status(400).json({ message: 'Prompt is required' });
+                return sendError(res, 400, 'INVALID_REQUEST', 'Prompt is required');
             }
+
+            const ipLimit = Math.max(1, Number.parseInt(process.env.AI_RATE_LIMIT_IP_PER_MIN || '60', 10));
+            const userLimit = Math.max(1, Number.parseInt(process.env.AI_RATE_LIMIT_USER_PER_MIN || '20', 10));
+            const allowedByRate = await assertRateLimit(req, res, {
+                scope: 'generate',
+                queue: AI_QUEUE_NAME,
+                ipPerMinute: ipLimit,
+                userPerMinute: userLimit,
+            });
+            if (!allowedByRate) return;
+
+            const canEnqueue = await assertQueueCapacity(AI_QUEUE_NAME, res);
+            if (!canEnqueue) return;
 
             const generationOptions = parseAiGenerationOptions(req.body);
 
@@ -241,10 +546,12 @@ export const createRoutes = (pool: Pool | null) => {
                 buildJobOptions()
             );
 
+            incrementCounter('jobs_enqueued_total', { queue: AI_QUEUE_NAME, source: 'generate' });
+
             return res.status(202).json({ jobId: job.id, queue: AI_QUEUE_NAME });
         } catch (error) {
             console.error('Membership gate error:', error);
-            return res.status(500).json({ message: 'Internal server error' });
+            return sendError(res, 500, 'INTERNAL_ERROR', 'Internal server error');
         }
     });
 
@@ -253,11 +560,21 @@ export const createRoutes = (pool: Pool | null) => {
             const { type, payload } = req.body || {};
 
             if (type !== AI_QUEUE_NAME && type !== TRYON_QUEUE_NAME) {
-                return res.status(400).json({ message: 'Invalid job type' });
+                return sendError(res, 400, 'INVALID_REQUEST', 'Invalid job type');
             }
 
             if (type === AI_QUEUE_NAME) {
-                if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
+                if (!req.userId) return sendError(res, 401, 'UNAUTHORIZED', 'User ID not found');
+
+                const ipLimit = Math.max(1, Number.parseInt(process.env.AI_RATE_LIMIT_IP_PER_MIN || '60', 10));
+                const userLimit = Math.max(1, Number.parseInt(process.env.AI_RATE_LIMIT_USER_PER_MIN || '20', 10));
+                const allowedByRate = await assertRateLimit(req, res, {
+                    scope: 'jobs',
+                    queue: AI_QUEUE_NAME,
+                    ipPerMinute: ipLimit,
+                    userPerMinute: userLimit,
+                });
+                if (!allowedByRate) return;
 
                 const membership = await membershipModel.getMembershipByUserId(req.userId);
                 const expiresAt = membership?.expires_at ? new Date(membership.expires_at) : null;
@@ -268,16 +585,16 @@ export const createRoutes = (pool: Pool | null) => {
                 );
 
                 if (!isActive) {
-                    return res.status(403).json({
-                        message: 'Active membership required',
-                        code: 'MEMBERSHIP_REQUIRED'
-                    });
+                    return sendError(res, 403, 'MEMBERSHIP_REQUIRED', 'Active membership required');
                 }
 
                 const prompt = typeof payload?.prompt === 'string' ? payload.prompt.trim() : '';
                 if (!prompt) {
-                    return res.status(400).json({ message: 'Prompt is required' });
+                    return sendError(res, 400, 'INVALID_REQUEST', 'Prompt is required');
                 }
+
+                const canEnqueue = await assertQueueCapacity(AI_QUEUE_NAME, res);
+                if (!canEnqueue) return;
 
                 const job = await enqueueJob(
                     AI_QUEUE_NAME,
@@ -289,6 +606,8 @@ export const createRoutes = (pool: Pool | null) => {
                     buildJobOptions()
                 );
 
+                incrementCounter('jobs_enqueued_total', { queue: AI_QUEUE_NAME, source: 'jobs' });
+
                 return res.status(202).json({
                     jobId: job.id,
                     queue: AI_QUEUE_NAME,
@@ -299,8 +618,21 @@ export const createRoutes = (pool: Pool | null) => {
             const personDataUrl = typeof payload?.personDataUrl === 'string' ? payload.personDataUrl : '';
             const clothDataUrl = typeof payload?.clothDataUrl === 'string' ? payload.clothDataUrl : '';
             if (!personDataUrl || !clothDataUrl) {
-                return res.status(400).json({ message: 'Missing try-on inputs' });
+                return sendError(res, 400, 'INVALID_REQUEST', 'Missing try-on inputs');
             }
+
+            const tryonIpLimit = Math.max(1, Number.parseInt(process.env.TRYON_RATE_LIMIT_IP_PER_MIN || '30', 10));
+            const tryonUserLimit = Math.max(1, Number.parseInt(process.env.TRYON_RATE_LIMIT_USER_PER_MIN || '10', 10));
+            const allowedByRate = await assertRateLimit(req, res, {
+                scope: 'jobs',
+                queue: TRYON_QUEUE_NAME,
+                ipPerMinute: tryonIpLimit,
+                userPerMinute: tryonUserLimit,
+            });
+            if (!allowedByRate) return;
+
+            const canEnqueue = await assertQueueCapacity(TRYON_QUEUE_NAME, res);
+            if (!canEnqueue) return;
 
             const job = await enqueueJob(
                 TRYON_QUEUE_NAME,
@@ -313,6 +645,8 @@ export const createRoutes = (pool: Pool | null) => {
                 buildJobOptions()
             );
 
+            incrementCounter('jobs_enqueued_total', { queue: TRYON_QUEUE_NAME, source: 'jobs' });
+
             return res.status(202).json({
                 jobId: job.id,
                 queue: TRYON_QUEUE_NAME,
@@ -320,7 +654,7 @@ export const createRoutes = (pool: Pool | null) => {
             });
         } catch (error) {
             console.error('Create job error:', error);
-            return res.status(500).json({ message: 'Internal server error' });
+            return sendError(res, 500, 'INTERNAL_ERROR', 'Internal server error');
         }
     });
 
@@ -328,42 +662,45 @@ export const createRoutes = (pool: Pool | null) => {
         try {
             const queue = getQueueByName(req.params.queue);
             if (!queue) {
-                return res.status(404).json({ message: 'Queue not found' });
+                return sendError(res, 404, 'NOT_FOUND', 'Queue not found');
             }
 
             return res.json({ queue: queue.name, stats: await getQueueStats(queue.name) });
         } catch (error) {
             console.error('Get queue stats error:', error);
-            return res.status(500).json({ message: 'Internal server error' });
+            return sendError(res, 500, 'INTERNAL_ERROR', 'Internal server error');
         }
     });
 
     router.get('/jobs/:queue/:id', authenticateOptional, async (req, res) => {
         try {
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('Expires', '0');
             const queue = getQueueByName(req.params.queue);
             if (!queue) {
-                return res.status(404).json({ message: 'Queue not found' });
+                return sendError(res, 404, 'NOT_FOUND', 'Queue not found');
             }
 
             const queueName = queue.name;
             if (queueName !== AI_QUEUE_NAME && queueName !== TRYON_QUEUE_NAME) {
-                return res.status(404).json({ message: 'Queue not found' });
+                return sendError(res, 404, 'NOT_FOUND', 'Queue not found');
             }
 
-            const job = getJobById(queueName, req.params.id);
+            const job = await getJobById(queueName, req.params.id);
             if (!job) {
-                return res.status(404).json({ message: 'Job not found' });
+                return sendError(res, 404, 'NOT_FOUND', 'Job not found');
             }
 
             const ownerId = (job.data as any)?.userId as number | undefined;
             if (ownerId) {
                 if (!req.userId) {
-                    return res.status(401).json({ message: 'User ID not found' });
+                    return sendError(res, 401, 'UNAUTHORIZED', 'User ID not found');
                 }
                 if (req.userId !== ownerId) {
                     const viewer = await userModel.findUserById(req.userId);
                     if (!viewer || !(viewer as any).is_admin) {
-                        return res.status(403).json({ message: 'Forbidden' });
+                        return sendError(res, 403, 'FORBIDDEN', 'Forbidden');
                     }
                 }
             }
@@ -384,7 +721,7 @@ export const createRoutes = (pool: Pool | null) => {
             });
         } catch (error) {
             console.error('Get job error:', error);
-            return res.status(500).json({ message: 'Internal server error' });
+            return sendError(res, 500, 'INTERNAL_ERROR', 'Internal server error');
         }
     });
 
@@ -628,6 +965,24 @@ export const createRoutes = (pool: Pool | null) => {
                 meta: canvas?.meta ?? design?.canvas ?? null
             };
 
+            const [itemsExternalized, selectionsExternalized, designExternalized, shippingExternalized, canvasExternalized] = await Promise.all([
+                externalizeImageDataUrls(items, { context: 'order-items' }),
+                externalizeImageDataUrls(selections || {}, { context: 'order-selections' }),
+                externalizeImageDataUrls(design || {}, { context: 'order-design' }),
+                externalizeImageDataUrls(shipping_info || {}, { context: 'order-shipping' }),
+                externalizeImageDataUrls(canvasPayload, { context: 'order-canvas' }),
+            ]);
+
+            const orderAssetRefs = [
+                ...itemsExternalized.assets,
+                ...selectionsExternalized.assets,
+                ...designExternalized.assets,
+                ...shippingExternalized.assets,
+                ...canvasExternalized.assets,
+            ];
+
+            const orderCanvasMeta = mergeAssetRefs(canvasExternalized.value?.meta, orderAssetRefs);
+
             const address =
                 (typeof addressRaw === 'string' && addressRaw.trim().length > 0 ? addressRaw.trim() : null) ||
                 (typeof shipping_info?.address === 'string' && shipping_info.address.trim().length > 0
@@ -649,15 +1004,15 @@ export const createRoutes = (pool: Pool | null) => {
                     req.userId,
                     totalNumber,
                     normalizedCategory ?? null,
-                    JSON.stringify(items),
-                    JSON.stringify(selections || {}),
-                    JSON.stringify(design || {}),
-                    JSON.stringify(shipping_info || {}),
+                    JSON.stringify(itemsExternalized.value),
+                    JSON.stringify(selectionsExternalized.value),
+                    JSON.stringify(designExternalized.value),
+                    JSON.stringify(shippingExternalized.value),
                     address,
                     phone,
-                    canvasPayload.frontSnapshot ?? null,
-                    canvasPayload.backSnapshot ?? null,
-                    canvasPayload.meta ? JSON.stringify(canvasPayload.meta) : null,
+                    canvasExternalized.value?.frontSnapshot ?? null,
+                    canvasExternalized.value?.backSnapshot ?? null,
+                    orderCanvasMeta ? JSON.stringify(orderCanvasMeta) : null,
                     sourceAllId ?? null
                 ]
             );
@@ -716,11 +1071,11 @@ export const createRoutes = (pool: Pool | null) => {
                         req.userId,
                         createdOrder.id,
                         normalizedCategory ?? null,
-                        JSON.stringify(selections || {}),
-                        JSON.stringify(design || {}),
-                        canvasPayload.frontSnapshot ?? null,
-                        canvasPayload.backSnapshot ?? null,
-                        canvasPayload.meta ? JSON.stringify(canvasPayload.meta) : null
+                        JSON.stringify(selectionsExternalized.value),
+                        JSON.stringify(designExternalized.value),
+                        canvasExternalized.value?.frontSnapshot ?? null,
+                        canvasExternalized.value?.backSnapshot ?? null,
+                        orderCanvasMeta ? JSON.stringify(orderCanvasMeta) : null
                     ]
                 );
                 allDesignId = allDesign.rows[0]?.id ?? null;
@@ -734,6 +1089,12 @@ export const createRoutes = (pool: Pool | null) => {
             }
 
             await client.query('COMMIT');
+            await invalidateMembershipCache(req.userId);
+            await invalidateOrderCache(req.userId);
+            await invalidateAdminOrderCache();
+            if (allDesignId) {
+                await invalidateGalleryCache(allDesignId);
+            }
             res.status(201).json({ order: createdOrder, allDesignId, membership: updatedMembership });
         } catch (error) {
             console.error('Create order error:', error);
@@ -752,8 +1113,12 @@ export const createRoutes = (pool: Pool | null) => {
     router.get('/cart', authenticate, async (req, res) => {
         try {
             if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
-            const items = await cartModel.listCartItems(req.userId);
-            res.json({ items });
+            const cacheKey = `cart:list:${req.userId}:v1`;
+            const payload = await readThroughCache('/cart', cacheKey, cacheTtl.cartList, async () => {
+                const items = await cartReadModel.listCartItems(req.userId as number);
+                return { items };
+            });
+            res.json(payload);
         } catch (error) {
             console.error('Get cart error:', error);
             res.status(500).json({ message: 'Internal server error' });
@@ -770,18 +1135,46 @@ export const createRoutes = (pool: Pool | null) => {
                 return res.status(400).json({ message: 'Invalid cart payload' });
             }
 
+            const canvasPayload = {
+                frontSnapshot: canvas?.frontSnapshot ?? canvas?.front ?? design?.canvas?.snapshots?.front ?? null,
+                backSnapshot: canvas?.backSnapshot ?? canvas?.back ?? design?.canvas?.snapshots?.back ?? null,
+                meta: canvas?.meta ?? design?.canvas ?? null
+            };
+
+            const [itemsExternalized, selectionsExternalized, designExternalized, canvasExternalized] = await Promise.all([
+                externalizeImageDataUrls(items, { context: 'cart-items' }),
+                externalizeImageDataUrls(selections || {}, { context: 'cart-selections' }),
+                externalizeImageDataUrls(design || {}, { context: 'cart-design' }),
+                externalizeImageDataUrls(canvasPayload, { context: 'cart-canvas' }),
+            ]);
+
+            const cartAssetRefs = [
+                ...itemsExternalized.assets,
+                ...selectionsExternalized.assets,
+                ...designExternalized.assets,
+                ...canvasExternalized.assets,
+            ];
+
+            const cartCanvasMeta = mergeAssetRefs(canvasExternalized.value?.meta, cartAssetRefs);
+
             const created = await cartModel.createCartItem({
                 userId: req.userId,
                 quantity: typeof quantity === 'number' ? quantity : 1,
                 price: typeof price === 'number' ? price : Number(price) || 0,
                 category: typeof category === 'string' ? category : null,
-                items,
-                selections,
-                design,
-                canvas,
+                items: itemsExternalized.value,
+                selections: selectionsExternalized.value,
+                design: designExternalized.value,
+                canvas: {
+                    frontSnapshot: canvasExternalized.value?.frontSnapshot ?? null,
+                    backSnapshot: canvasExternalized.value?.backSnapshot ?? null,
+                    meta: cartCanvasMeta,
+                },
                 sourceAllId: typeof sourceAllId === 'number' ? sourceAllId : null,
                 publishToAll: publishToAll !== false
             });
+
+            await invalidateCartCache(req.userId);
 
             res.status(201).json({ item: created });
         } catch (error) {
@@ -807,6 +1200,8 @@ export const createRoutes = (pool: Pool | null) => {
                 return res.status(404).json({ message: 'Cart item not found' });
             }
 
+            await invalidateCartCache(req.userId);
+
             res.json({ item: updated });
         } catch (error) {
             console.error('Update cart error:', error);
@@ -828,6 +1223,8 @@ export const createRoutes = (pool: Pool | null) => {
                 return res.status(404).json({ message: 'Cart item not found' });
             }
 
+            await invalidateCartCache(req.userId);
+
             res.json({ success: true });
         } catch (error) {
             console.error('Remove cart error:', error);
@@ -840,6 +1237,7 @@ export const createRoutes = (pool: Pool | null) => {
         try {
             if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
             await cartModel.clearCart(req.userId);
+            await invalidateCartCache(req.userId);
             res.json({ success: true });
         } catch (error) {
             console.error('Clear cart error:', error);
@@ -929,10 +1327,25 @@ export const createRoutes = (pool: Pool | null) => {
                     meta: cartItem.canvas_meta ?? null
                 };
 
-                const selectionsWithQty = {
-                    ...(cartItem.selections || {}),
-                    quantity: qty
-                };
+                const [itemsExternalized, selectionsExternalized, designExternalized, shippingExternalized, canvasExternalized] = await Promise.all([
+                    externalizeImageDataUrls(cartItem.items || [], { context: 'checkout-items' }),
+                    externalizeImageDataUrls({ ...(cartItem.selections || {}), quantity: qty }, { context: 'checkout-selections' }),
+                    externalizeImageDataUrls(cartItem.design || {}, { context: 'checkout-design' }),
+                    externalizeImageDataUrls({ address }, { context: 'checkout-shipping' }),
+                    externalizeImageDataUrls(canvasPayload, { context: 'checkout-canvas' }),
+                ]);
+
+                const checkoutAssetRefs = [
+                    ...itemsExternalized.assets,
+                    ...selectionsExternalized.assets,
+                    ...designExternalized.assets,
+                    ...shippingExternalized.assets,
+                    ...canvasExternalized.assets,
+                ];
+
+                const checkoutCanvasMeta = mergeAssetRefs(canvasExternalized.value?.meta, checkoutAssetRefs);
+
+                const selectionsWithQty = selectionsExternalized.value;
 
                 const created = await client.query(
                     `
@@ -944,15 +1357,15 @@ export const createRoutes = (pool: Pool | null) => {
                         req.userId,
                         orderTotal,
                         normalizedCategory ?? null,
-                        JSON.stringify(cartItem.items || []),
+                        JSON.stringify(itemsExternalized.value),
                         JSON.stringify(selectionsWithQty),
-                        JSON.stringify(cartItem.design || {}),
-                        JSON.stringify({ address }),
+                        JSON.stringify(designExternalized.value),
+                        JSON.stringify(shippingExternalized.value),
                         address,
                         phone || null,
-                        canvasPayload.frontSnapshot ?? null,
-                        canvasPayload.backSnapshot ?? null,
-                        canvasPayload.meta ? JSON.stringify(canvasPayload.meta) : null,
+                        canvasExternalized.value?.frontSnapshot ?? null,
+                        canvasExternalized.value?.backSnapshot ?? null,
+                        checkoutCanvasMeta ? JSON.stringify(checkoutCanvasMeta) : null,
                         cartItem.source_all_id ?? null
                     ]
                 );
@@ -1010,10 +1423,10 @@ export const createRoutes = (pool: Pool | null) => {
                             createdOrder.id,
                             normalizedCategory ?? null,
                             JSON.stringify(selectionsWithQty || {}),
-                            JSON.stringify(cartItem.design || {}),
-                            canvasPayload.frontSnapshot ?? null,
-                            canvasPayload.backSnapshot ?? null,
-                            canvasPayload.meta ? JSON.stringify(canvasPayload.meta) : null
+                            JSON.stringify(designExternalized.value),
+                            canvasExternalized.value?.frontSnapshot ?? null,
+                            canvasExternalized.value?.backSnapshot ?? null,
+                            checkoutCanvasMeta ? JSON.stringify(checkoutCanvasMeta) : null
                         ]
                     );
                     const allDesignId = allDesign.rows[0]?.id ?? null;
@@ -1030,6 +1443,11 @@ export const createRoutes = (pool: Pool | null) => {
             await client.query(`DELETE FROM cart_items WHERE user_id = $1`, [req.userId]);
 
             await client.query('COMMIT');
+            await invalidateMembershipCache(req.userId);
+            await invalidateCartCache(req.userId);
+            await invalidateOrderCache(req.userId);
+            await invalidateAdminOrderCache();
+            await invalidateGalleryCache(null);
             res.status(201).json({ orders: createdOrders, membership: updatedMembership });
         } catch (error) {
             console.error('Cart checkout error:', error);
@@ -1061,11 +1479,32 @@ export const createRoutes = (pool: Pool | null) => {
     });
 
     // 获取用户订单历史
+    router.get('/orders/summary', authenticate, async (req, res) => {
+        try {
+            if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
+            const limitRaw = Number.parseInt(String(req.query.limit || '30'), 10);
+            const limit = Number.isFinite(limitRaw) ? limitRaw : 30;
+            const cacheKey = `orders:summary:${req.userId}:${limit}:v1`;
+            const payload = await readThroughCache('/orders/summary', cacheKey, cacheTtl.orderSummary, async () => {
+                const orders = await orderReadModel.getOrderSummariesByUserId(req.userId as number, limit);
+                return { orders };
+            });
+            res.json(payload);
+        } catch (error) {
+            console.error('Get order summaries error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
     router.get('/orders', authenticate, async (req, res) => {
         try {
             if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
-            const orders = await orderModel.getOrdersByUserId(req.userId);
-            res.json({ orders });
+            const cacheKey = `orders:list:${req.userId}:v1`;
+            const payload = await readThroughCache('/orders', cacheKey, cacheTtl.orderList, async () => {
+                const orders = await orderReadModel.getOrdersByUserId(req.userId as number);
+                return { orders };
+            });
+            res.json(payload);
         } catch (error) {
             console.error('Get orders error:', error);
             res.status(500).json({ message: 'Internal server error' });
@@ -1078,8 +1517,12 @@ export const createRoutes = (pool: Pool | null) => {
             const adminUser = await requireAdmin(req, res);
             if (!adminUser) return;
 
-            const orders = await orderModel.getAllOrders();
-            res.json({ orders });
+            const cacheKey = 'orders:admin:list:v1';
+            const payload = await readThroughCache('/admin/orders', cacheKey, cacheTtl.adminOrders, async () => {
+                const orders = await orderReadModel.getAllOrders();
+                return { orders };
+            });
+            res.json(payload);
         } catch (error) {
             console.error('Get admin orders error:', error);
             res.status(500).json({ message: 'Internal server error' });
@@ -1106,6 +1549,9 @@ export const createRoutes = (pool: Pool | null) => {
             if (!updated) {
                 return res.status(404).json({ message: 'Order not found' });
             }
+
+            await invalidateAdminOrderCache();
+            await invalidateOrderCache(Number((updated as any)?.user_id || 0));
 
             res.json({ order: updated });
         } catch (error) {
@@ -1161,10 +1607,21 @@ export const createRoutes = (pool: Pool | null) => {
     router.get('/memberships/me', authenticate, async (req, res) => {
         try {
             if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
-            const membership = await membershipModel.getMembershipByUserId(req.userId);
-            res.json({ membership });
+
+            const cacheKey = `membership:me:${req.userId}:v1`;
+
+            const payload = await readThroughCache('/memberships/me', cacheKey, cacheTtl.membershipMe, async () => {
+                const membership = await membershipReadModel.getMembershipByUserId(req.userId as number);
+                return { membership };
+            });
+            res.json(payload);
         } catch (error) {
-            console.error('Get membership error:', error);
+            logError('membership_me_failed', {
+                requestId: res.locals?.requestId || null,
+                route: '/memberships/me',
+                userId: req.userId || null,
+                error,
+            });
             res.status(500).json({ message: 'Internal server error' });
         }
     });
@@ -1173,8 +1630,12 @@ export const createRoutes = (pool: Pool | null) => {
         try {
             if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
             const limit = req.query.limit ? Number(req.query.limit) : 50;
-            const transactions = await membershipModel.getTransactionsByUserId(req.userId, limit);
-            res.json({ transactions });
+            const cacheKey = `membership:transactions:${req.userId}:${limit}:v1`;
+            const payload = await readThroughCache('/memberships/transactions/me', cacheKey, cacheTtl.membershipTransactions, async () => {
+                const transactions = await membershipReadModel.getTransactionsByUserId(req.userId as number, limit);
+                return { transactions };
+            });
+            res.json(payload);
         } catch (error) {
             console.error('Get membership transactions error:', error);
             res.status(500).json({ message: 'Internal server error' });
@@ -1251,12 +1712,14 @@ export const createRoutes = (pool: Pool | null) => {
                         amount: rewardAmount,
                         currency: 'CNY'
                     };
+                    await invalidateMembershipCache(Number(row.inviter_user_id));
                     void updatedMembership;
                 }
             } catch (error) {
                 console.warn('Referral reward on membership purchase failed:', error);
             }
 
+            await invalidateMembershipCache(req.userId);
             res.status(201).json({ membership });
         } catch (error) {
             console.error('Create membership error:', error);

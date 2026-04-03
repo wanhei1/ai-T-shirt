@@ -1,16 +1,34 @@
 import type { AuthResponse, LoginRequest, RegisterRequest, User } from '@/types/auth';
 
+export type ApiClientError = Error & {
+  status?: number;
+  code?: string;
+  requestId?: string | null;
+  details?: unknown;
+};
+
+const isAbortLikeError = (error: unknown) => {
+  if (!error) return false;
+  if (error instanceof DOMException && error.name === 'AbortError') return true;
+  if (error instanceof Error && error.name === 'AbortError') return true;
+  if (error instanceof Error && /aborted|aborterror/i.test(error.message)) return true;
+  return false;
+};
+
 // --- Start of new, robust implementation ---
 
 // 1. Get the list of potential API URLs from environment variables.
-const apiUrlsString = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8189';
-const potentialApiUrls = apiUrlsString.split(',').map(url => url.trim()).filter(Boolean);
+const apiUrlsString = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8185';
+const envApiUrls = apiUrlsString.split(',').map(url => url.trim()).filter(Boolean);
+const defaultApiUrls = ['http://localhost:8185', 'http://localhost:8189', 'http://localhost:8181'];
 const browserProxyBaseUrl = typeof window !== 'undefined' ? `${window.location.origin}/backend` : null;
 
-if (browserProxyBaseUrl) {
-  // Use Next.js rewrite proxy first so browser does not need direct access to backend port.
-  potentialApiUrls.unshift(browserProxyBaseUrl);
-}
+const dedupeUrls = (urls: string[]) => Array.from(new Set(urls));
+const potentialApiUrls = dedupeUrls([
+  ...(browserProxyBaseUrl ? [browserProxyBaseUrl] : []),
+  ...envApiUrls,
+  ...defaultApiUrls,
+]);
 
 // 2. A variable to hold the determined, working API base URL. This acts as a cache.
 let determinedApiBaseUrl: string | null = null;
@@ -22,20 +40,13 @@ const findAvailableApiUrl = async (): Promise<string> => {
     return determinedApiBaseUrl;
   }
 
-  // In browser, always prefer same-origin proxy and skip extra probing.
-  // This avoids timeout noise when localhost/remote addresses are unreachable from the client device.
-  if (browserProxyBaseUrl) {
-    determinedApiBaseUrl = browserProxyBaseUrl;
-    return browserProxyBaseUrl;
-  }
-
   for (const url of potentialApiUrls) {
     try {
       // Use the /health endpoint for a quick and lightweight check.
       const healthCheckUrl = `${url}/health`;
       const response = await fetch(healthCheckUrl, {
         method: 'GET',
-        signal: AbortSignal.timeout(3000), // 3-second timeout for the check
+        signal: AbortSignal.timeout(2000),
       });
       if (response.ok) {
         console.log(`✅ API connection successful. Using base URL: ${url}`);
@@ -50,7 +61,7 @@ const findAvailableApiUrl = async (): Promise<string> => {
   // If no URL is available after checking all, fall back to the first one.
   // This allows for error messages on the UI instead of a total crash.
   console.error("🚨 No available API server found from the list. Falling back to the first configured URL.");
-  determinedApiBaseUrl = potentialApiUrls[0] || 'http://localhost:8189';
+  determinedApiBaseUrl = potentialApiUrls[0] || 'http://localhost:8185';
   return determinedApiBaseUrl;
 };
 
@@ -102,12 +113,21 @@ class ApiClient {
       const response = await fetch(url, config);
 
       if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ message: `HTTP error! Status: ${response.status}` }));
-        const errorMessage = errorData?.message || `An unknown error occurred.`
+        const errorData = await response.json().catch(() => null) as {
+          message?: string;
+          code?: string;
+          details?: unknown;
+          requestId?: string;
+        } | null;
+        const responseRequestId = response.headers.get('x-request-id');
+        const errorMessage = errorData?.message || `HTTP error! Status: ${response.status}`
 
         // Attach status to the error so callers can branch on auth failures.
-        const err = new Error(errorMessage) as Error & { status?: number }
+        const err = new Error(errorMessage) as ApiClientError
         err.status = response.status
+        err.code = errorData?.code
+        err.details = errorData?.details
+        err.requestId = errorData?.requestId || responseRequestId
 
         const normalizedMessage = String(errorMessage).toLowerCase()
         const isExpiredOrInvalidToken =
@@ -127,11 +147,6 @@ class ApiClient {
           }
         }
 
-        const method = (options.method || 'GET').toUpperCase()
-        if (isExpiredOrInvalidToken && method === 'GET') {
-          return Promise.resolve(null as T)
-        }
-
         throw err
       }
 
@@ -144,7 +159,9 @@ class ApiClient {
       }
 
     } catch (error) {
-      console.error(`API request to ${url} failed:`, error);
+      if (!isAbortLikeError(error)) {
+        console.error(`API request to ${url} failed:`, error);
+      }
       throw error;
     }
   }
@@ -215,6 +232,13 @@ class ApiClient {
 
   async getOrders() {
     return this.request<{ orders: any[] }>('/api/orders', {
+      method: 'GET',
+    });
+  }
+
+  async getOrderSummaries(limit = 30) {
+    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.trunc(limit))) : 30;
+    return this.request<{ orders: any[] }>(`/api/orders/summary?limit=${safeLimit}`, {
       method: 'GET',
     });
   }
@@ -366,9 +390,11 @@ class ApiClient {
     });
   }
 
-  async getJobStatus(queue: string, jobId: string | number) {
+  async getJobStatus(queue: string, jobId: string | number, signal?: AbortSignal) {
     return this.request<{ job: any }>(`/api/jobs/${queue}/${jobId}`, {
       method: "GET",
+      cache: "no-store",
+      signal,
     });
   }
 

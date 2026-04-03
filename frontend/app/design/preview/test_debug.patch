@@ -1,0 +1,10 @@
+--- frontend/app/design/preview/page.tsx
++++ frontend/app/design/preview/page.tsx
+@@ -121,6 +121,7 @@
+     if (activeTryOnUrl) return
+ 
+     // If the current side has no try-on result, fall back to design preview
+     // instead of showing a blank try-on view.
++    // console.log("Falling back tryOnEnabled to false because activeTryOnUrl is null");
+     setTryOnEnabled(false)
+   }, [activeTryOnUrl, tryOnEnabled])

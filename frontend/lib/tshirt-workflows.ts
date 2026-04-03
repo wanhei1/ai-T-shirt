@@ -138,7 +138,7 @@ export function createSDXLTShirtWorkflow(params: TShirtDesignParams): Workflow {
   return {
     "4": {
       inputs: {
-        ckpt_name: "sd_xl_base_1.0.safetensors"
+        ckpt_name: "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors"
       },
       class_type: "CheckpointLoaderSimple"
     },

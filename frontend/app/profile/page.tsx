@@ -32,6 +32,7 @@ import {
   Users,
   X,
 } from "lucide-react";
+import type { ApiClientError } from "@/lib/api-client";
 
 type MembershipRecord = {
   plan_id: string;
@@ -346,8 +347,9 @@ export default function ProfilePage() {
       const refreshed = await apiClient.getReferralMe();
       setReferralMe(refreshed || null);
     } catch (error) {
-      const status = (error as { status?: number })?.status;
-      const msg = (error as Error)?.message || "";
+      const err = error as ApiClientError;
+      const status = err?.status;
+      const msg = err?.message || "";
       if (status === 409) {
         setReferralMessage({
           type: "error",
@@ -364,9 +366,11 @@ export default function ProfilePage() {
           text: translate({ zh: "不能兑换自己的邀请码", en: "You cannot redeem your own code" }),
         });
       } else {
+        const codeTag = err?.code ? ` [${err.code}]` : "";
+        const requestTag = err?.requestId ? ` (requestId: ${err.requestId})` : "";
         setReferralMessage({
           type: "error",
-          text: translate({ zh: "兑换失败，请重试", en: "Redeem failed, please try again" }),
+          text: `${translate({ zh: "兑换失败，请重试", en: "Redeem failed, please try again" })}${codeTag}${requestTag}`,
         });
       }
     } finally {

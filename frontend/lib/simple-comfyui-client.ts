@@ -133,7 +133,7 @@ export class SimpleComfyUIClient {
     this.fallbackUrls = Array.from(new Set(allUrls))
     console.log("ComfyUI 服务器列表 (按优先级):", this.fallbackUrls)
 
-    this.defaultModelName = process.env.NEXT_PUBLIC_COMFYUI_MODEL_NAME || "dreamshaper_8.safetensors"
+    this.defaultModelName = process.env.NEXT_PUBLIC_COMFYUI_MODEL_NAME || "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors"
     this.defaultSamplerName = process.env.NEXT_PUBLIC_COMFYUI_DEFAULT_SAMPLER || "euler"
     this.defaultScheduler = process.env.NEXT_PUBLIC_COMFYUI_DEFAULT_SCHEDULER || "normal"
     this.defaultSteps = Number.parseInt(process.env.NEXT_PUBLIC_COMFYUI_DEFAULT_STEPS || "24", 10)

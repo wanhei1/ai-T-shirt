@@ -24,6 +24,7 @@ import Link from "next/link";
 import { ApiConnectionTest } from "@/components/api-connection-test";
 import { useAuth } from "@/contexts/auth-context";
 import { useLanguage } from "@/contexts/language-context";
+import type { ApiClientError } from "@/lib/api-client";
 
 type MembershipRecord = {
   plan_id: string;
@@ -34,11 +35,10 @@ type MembershipRecord = {
 type OrderRecord = {
   id: number | string;
   created_at: string;
+  status?: string;
   selections?: Record<string, any>;
-  design?: any;
   canvas_front?: string | null;
   canvas_back?: string | null;
-  canvas_meta?: any;
 };
 
 export default function HomePage() {
@@ -76,7 +76,12 @@ export default function HomePage() {
         }
       } catch (error) {
         if (isMounted) {
-          console.warn("Failed to fetch membership", error);
+          const err = error as ApiClientError;
+          console.warn("Failed to fetch membership", {
+            message: err?.message,
+            code: err?.code,
+            requestId: err?.requestId,
+          });
           setMembership(null);
         }
       } finally {
@@ -105,19 +110,24 @@ export default function HomePage() {
       try {
         setIsLoadingOrders(true);
         const { apiClient } = await import("@/lib/api-client");
-        const response = await apiClient.getOrders();
+        const response = await apiClient.getOrderSummaries(30);
         if (isMounted) {
           setMyOrders((response.orders || []) as OrderRecord[]);
         }
       } catch (error) {
         if (!isMounted) return;
 
-        const status = (error as { status?: number })?.status;
+        const err = error as ApiClientError;
+        const status = err?.status;
         if (status === 401) {
           logout();
           setMyOrders(null);
         } else {
-          console.warn("Failed to fetch orders", error);
+          console.warn("Failed to fetch orders", {
+            message: err?.message,
+            code: err?.code,
+            requestId: err?.requestId,
+          });
           setMyOrders([]);
         }
       } finally {
@@ -153,11 +163,9 @@ export default function HomePage() {
   }, [user, isLoadingMembership, hasActiveMembership]);
 
   const getOrderPreviews = (order?: OrderRecord | null) => {
-    const elements = order?.design?.elements || [];
-    const firstImage = elements.find((el: any) => el?.type === "image" || el?.type === "ai-generated");
     return {
-      front: order?.canvas_front || order?.design?.canvas?.snapshots?.front || firstImage?.content || null,
-      back: order?.canvas_back || order?.design?.canvas?.snapshots?.back || null,
+      front: order?.canvas_front || null,
+      back: order?.canvas_back || null,
     };
   };
 

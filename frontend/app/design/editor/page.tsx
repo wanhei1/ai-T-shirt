@@ -34,6 +34,7 @@ import { useLanguage, type LanguageText } from "@/contexts/language-context"
 import { buildCanvasMeta, CANVAS_SIZE, getShirtColorHex, getShirtPhotoSrc, PRINT_AREA } from "@/lib/design-canvas"
 import { externalizeDesignAssets } from "@/lib/design-storage"
 import apiClient from "@/lib/api-client"
+import { pollJobUntilDone } from "@/lib/job-polling"
 import type { DesignElement, TShirtSelections } from "@/types/design"
 
 const fonts = ["Arial", "Helvetica", "Times New Roman", "Georgia", "Verdana", "Courier New", "Impact", "Comic Sans MS"]
@@ -168,6 +169,7 @@ export default function DesignEditorPage() {
   const dragElementStartRef = useRef({ x: 0, y: 0 })
   const resizeStartRef = useRef({ width: 0, height: 0 })
   const canvasZoomRef = useRef(1)
+  const tryOnPollControllerRef = useRef<AbortController | null>(null)
   const updateElementRef = useRef<(id: string, updates: Partial<DesignElement>) => void>(() => {})
   const { translate } = useLanguage()
   const [hydrated, setHydrated] = useState(false)
@@ -243,25 +245,34 @@ export default function DesignEditorPage() {
       reader.readAsDataURL(blob)
     })
 
-  const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
-
   const pollTryOnJob = async (queue: string, jobId: string | number) => {
-    while (true) {
-      const status = await apiClient.getJobStatus(queue, jobId)
-      const job = status.job
-      const state = job?.state
+    tryOnPollControllerRef.current?.abort()
+    const controller = new AbortController()
+    tryOnPollControllerRef.current = controller
 
-      if (state === "completed") {
-        return job?.result?.imageUrl as string | undefined
-      }
-
-      if (state === "failed") {
-        throw new Error(job?.failedReason || "试穿失败")
-      }
-
-      await delay(1500)
-    }
+    return pollJobUntilDone({
+      queue,
+      jobId,
+      fetchStatus: apiClient.getJobStatus.bind(apiClient),
+      getResult: (job) => job?.result?.imageUrl as string | undefined,
+      getFailedReason: (job) => job?.failedReason as string | undefined,
+      timeoutMs: 10 * 60 * 1000,
+      timeoutMessage: "试穿任务等待超时，请稍后重试",
+      signal: controller.signal,
+    })
+      .finally(() => {
+        if (tryOnPollControllerRef.current === controller) {
+          tryOnPollControllerRef.current = null
+        }
+      })
   }
+
+  useEffect(() => {
+    return () => {
+      tryOnPollControllerRef.current?.abort()
+      tryOnPollControllerRef.current = null
+    }
+  }, [])
 
   const resizeDataUrlToTarget = async (dataUrl: string, width = 768, height = 1024): Promise<string> => {
     const img = await loadImage(dataUrl)
@@ -1513,7 +1524,7 @@ export default function DesignEditorPage() {
                     />
                   )}
 
-                  {shirtPhotoSrc ? (
+                  {hydrated && shirtPhotoSrc ? (
                     <NextImage
                       src={shirtPhotoSrc}
                       alt={translate({ zh: "T 恤底图", en: "T-shirt base" })}

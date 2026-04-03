@@ -1,0 +1,46 @@
+name: Key Rotation Verification
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify-rotated-secrets:
+    name: Verify Rotated Production Secrets
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: production
+      JWT_SECRET: ${{ secrets.JWT_SECRET_PROD }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL_PROD }}
+      RABBITMQ_URL: ${{ secrets.RABBITMQ_URL_PROD }}
+      ADMIN_PASSWORD: ${{ secrets.ADMIN_PASSWORD_PROD }}
+      REDIS_URL: ${{ secrets.REDIS_URL_PROD }}
+      REQUIRE_SHARED_JOB_STATE: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate required production secrets are configured
+        run: |
+          missing=0
+          for v in JWT_SECRET DATABASE_URL RABBITMQ_URL ADMIN_PASSWORD REDIS_URL; do
+            if [ -z "${!v}" ]; then
+              echo "Missing required secret mapped to env: $v"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            exit 1
+          fi
+
+      - name: Run strict production env guard
+        run: npm run security:validate-env:strict

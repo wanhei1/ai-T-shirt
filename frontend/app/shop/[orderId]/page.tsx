@@ -4,7 +4,7 @@ import { use, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useLanguage } from "@/contexts/language-context";
-import apiClient from "@/lib/api-client";
+import apiClient, { type ApiClientError } from "@/lib/api-client";
 import { getCached, invalidateCached, setCachedForever } from "@/lib/client-cache";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -196,8 +196,11 @@ export default function ShopDetailPage({ params }: { params: Promise<{ orderId: 
       router.push("/profile");
     } catch (error) {
       console.error("Purchase failed", error);
-      const status = (error as { status?: number })?.status
-      const message = (error as Error)?.message || ""
+      const err = error as ApiClientError
+      const status = err?.status
+      const message = err?.message || ""
+      const codeTag = err?.code ? ` [${err.code}]` : ""
+      const requestTag = err?.requestId ? ` (requestId: ${err.requestId})` : ""
 
       if (status === 403 && message.toLowerCase().includes("membership")) {
         alert(translate({ zh: "需要有效会员才能购买", en: "An active membership is required to purchase." }))
@@ -210,7 +213,7 @@ export default function ShopDetailPage({ params }: { params: Promise<{ orderId: 
         return
       }
 
-      alert(translate({ zh: "购买失败，请重试", en: "Purchase failed, please try again" }));
+      alert(`${translate({ zh: "购买失败，请重试", en: "Purchase failed, please try again" })}${codeTag}${requestTag}`);
     } finally {
       setIsPlacingOrder(false);
     }

@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { useLanguage } from "@/contexts/language-context";
-import apiClient from "@/lib/api-client";
+import apiClient, { type ApiClientError } from "@/lib/api-client";
 
 type CartItem = {
   id: number;
@@ -40,6 +40,14 @@ export default function CartPage() {
   const [address, setAddress] = useState("");
   const [isCheckingOut, setIsCheckingOut] = useState(false);
 
+  const formatApiError = (error: unknown, fallback: string) => {
+    const err = error as ApiClientError;
+    const message = err?.message || fallback;
+    const codeTag = err?.code ? ` [${err.code}]` : "";
+    const requestTag = err?.requestId ? ` (requestId: ${err.requestId})` : "";
+    return `${message}${codeTag}${requestTag}`;
+  };
+
   const loadCart = async () => {
     try {
       setIsLoading(true);
@@ -47,7 +55,7 @@ export default function CartPage() {
       const response = await apiClient.getCart();
       setItems((response.items || []) as CartItem[]);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "加载购物车失败");
+      setError(formatApiError(err, "加载购物车失败"));
     } finally {
       setIsLoading(false);
     }
@@ -71,7 +79,7 @@ export default function CartPage() {
       const updated = response.item as CartItem;
       setItems((prev) => prev.map((item) => (item.id === itemId ? updated : item)));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "更新数量失败");
+      setError(formatApiError(err, "更新数量失败"));
     }
   };
 
@@ -80,7 +88,7 @@ export default function CartPage() {
       await apiClient.removeCartItem(itemId);
       setItems((prev) => prev.filter((item) => item.id !== itemId));
     } catch (err) {
-      setError(err instanceof Error ? err.message : "移除失败");
+      setError(formatApiError(err, "移除失败"));
     }
   };
 
@@ -89,7 +97,7 @@ export default function CartPage() {
       await apiClient.clearCart();
       setItems([]);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "清空失败");
+      setError(formatApiError(err, "清空失败"));
     }
   };
 
@@ -105,8 +113,9 @@ export default function CartPage() {
       await apiClient.checkoutCart({ address: address.trim() });
       router.push("/profile");
     } catch (error) {
-      const status = (error as { status?: number })?.status;
-      const message = (error as Error)?.message || "";
+      const err = error as ApiClientError;
+      const status = err?.status;
+      const message = err?.message || "";
 
       if (status === 403 && message.toLowerCase().includes("membership")) {
         alert(translate({ zh: "需要有效会员才能下单", en: "An active membership is required to place orders." }));
@@ -124,7 +133,10 @@ export default function CartPage() {
         return;
       }
 
-      setError(translate({ zh: "结算失败，请稍后再试", en: "Checkout failed. Please try again." }));
+      const base = translate({ zh: "结算失败，请稍后再试", en: "Checkout failed. Please try again." });
+      const codeTag = err?.code ? ` [${err.code}]` : "";
+      const requestTag = err?.requestId ? ` (requestId: ${err.requestId})` : "";
+      setError(`${base}${codeTag}${requestTag}`);
     } finally {
       setIsCheckingOut(false);
     }

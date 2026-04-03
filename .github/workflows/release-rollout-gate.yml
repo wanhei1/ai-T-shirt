@@ -1,0 +1,76 @@
+name: Release Rollout Gate
+
+on:
+  workflow_dispatch:
+    inputs:
+      strategy:
+        description: Rollout strategy
+        required: true
+        default: canary
+        type: choice
+        options:
+          - canary
+          - blue-green
+      candidate_metrics_url:
+        description: Candidate /metrics URL
+        required: true
+        type: string
+      baseline_metrics_url:
+        description: Baseline /metrics URL (required for blue-green)
+        required: false
+        type: string
+      auto_rollback:
+        description: Trigger rollback webhook on gate failure
+        required: true
+        default: false
+        type: boolean
+      sample_seconds:
+        description: Sampling window seconds
+        required: true
+        default: '60'
+        type: string
+
+jobs:
+  release-gate:
+    name: Release Strategy Gate
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: production
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      DATABASE_URL: ${{ secrets.DATABASE_URL }}
+      RABBITMQ_URL: ${{ secrets.RABBITMQ_URL }}
+      REDIS_URL: ${{ secrets.REDIS_URL }}
+      REQUIRE_SHARED_JOB_STATE: true
+
+      RELEASE_CANDIDATE_METRICS_URL: ${{ inputs.candidate_metrics_url }}
+      RELEASE_BASELINE_METRICS_URL: ${{ inputs.baseline_metrics_url }}
+      RELEASE_SAMPLE_SECONDS: ${{ inputs.sample_seconds }}
+      RELEASE_AUTO_ROLLBACK: ${{ inputs.auto_rollback }}
+      RELEASE_METRICS_TOKEN: ${{ secrets.RELEASE_METRICS_TOKEN }}
+      RELEASE_ROLLBACK_WEBHOOK_URL: ${{ secrets.RELEASE_ROLLBACK_WEBHOOK_URL }}
+      RELEASE_ROLLBACK_WEBHOOK_TOKEN: ${{ secrets.RELEASE_ROLLBACK_WEBHOOK_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate release preflight
+        run: npm run release:preflight
+
+      - name: Enforce baseline for blue-green
+        if: ${{ inputs.strategy == 'blue-green' && inputs.baseline_metrics_url == '' }}
+        run: |
+          echo "baseline_metrics_url is required for blue-green strategy"
+          exit 1
+
+      - name: Evaluate rollout SLO gate
+        run: npm run release:guard

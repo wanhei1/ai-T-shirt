@@ -1,0 +1,81 @@
+name: Security Readiness
+
+on:
+  pull_request:
+    paths:
+      - backend/src/config/env-guard.ts
+      - backend/package.json
+      - package.json
+      - .github/workflows/security-readiness.yml
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - backend/src/config/env-guard.ts
+      - backend/package.json
+      - package.json
+      - .github/workflows/security-readiness.yml
+  workflow_dispatch:
+
+jobs:
+  strict-env-guard:
+    name: Strict Env Guard
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: production
+      JWT_SECRET: ci-production-jwt-secret-at-least-32-characters
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/tshirt_designer
+      RABBITMQ_URL: amqp://ci_user:ci_password@127.0.0.1:5672/
+      ADMIN_PASSWORD: ci-admin-password-strong-enough-12345
+      REDIS_URL: redis://127.0.0.1:6379
+      REQUIRE_SHARED_JOB_STATE: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate strict production env policy
+        run: npm run security:validate-env:strict
+
+  reject-weak-secrets:
+    name: Reject Weak Secrets
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: production
+      JWT_SECRET: 123456
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/tshirt_designer
+      RABBITMQ_URL: amqp://guest:guest@127.0.0.1:5672/
+      ADMIN_PASSWORD: 123456
+      REDIS_URL: redis://127.0.0.1:6379
+      REQUIRE_SHARED_JOB_STATE: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Verify weak secrets are blocked
+        run: |
+          if npm run security:validate-env:strict; then
+            echo "Expected env guard to fail on weak production secrets, but it passed"
+            exit 1
+          fi
+          echo "Weak secret policy enforcement works as expected"

@@ -1,0 +1,173 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: tshirt_db
+      POSTGRES_USER: tshirt_user
+      POSTGRES_PASSWORD: tshirt_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tshirt_user -d tshirt_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:3-management
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: tshirt_app
+      RABBITMQ_DEFAULT_PASS: tshirt_password
+      RABBITMQ_DEFAULT_VHOST: tshirt
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "dist/migrate.js"]
+    restart: "no"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://tshirt_user:tshirt_password@postgres:5432/tshirt_db
+      JWT_SECRET: replace-with-strong-secret-at-least-32-chars
+      REDIS_URL: redis://redis:6379
+      REQUIRE_SHARED_JOB_STATE: "true"
+      ALLOW_INMEMORY_JOB_STATE: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 8185
+      DATABASE_URL: postgresql://tshirt_user:tshirt_password@postgres:5432/tshirt_db
+      JWT_SECRET: replace-with-strong-secret-at-least-32-chars
+      FRONTEND_URL: http://localhost:3000
+      RABBITMQ_URL: amqp://tshirt_app:tshirt_password@rabbitmq:5672/tshirt
+      REDIS_URL: redis://redis:6379
+      REQUIRE_SHARED_JOB_STATE: "true"
+      ALLOW_INMEMORY_JOB_STATE: "false"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8185/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  api2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      PORT: 8185
+      DATABASE_URL: postgresql://tshirt_user:tshirt_password@postgres:5432/tshirt_db
+      JWT_SECRET: replace-with-strong-secret-at-least-32-chars
+      FRONTEND_URL: http://localhost:3000
+      RABBITMQ_URL: amqp://tshirt_app:tshirt_password@rabbitmq:5672/tshirt
+      REDIS_URL: redis://redis:6379
+      REQUIRE_SHARED_JOB_STATE: "true"
+      ALLOW_INMEMORY_JOB_STATE: "false"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8185/health/ready').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  worker1:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "dist/worker.js"]
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://tshirt_user:tshirt_password@postgres:5432/tshirt_db
+      JWT_SECRET: replace-with-strong-secret-at-least-32-chars
+      RABBITMQ_URL: amqp://tshirt_app:tshirt_password@rabbitmq:5672/tshirt
+      REDIS_URL: redis://redis:6379
+      REQUIRE_SHARED_JOB_STATE: "true"
+      ALLOW_INMEMORY_JOB_STATE: "false"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  worker2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["node", "dist/worker.js"]
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: postgresql://tshirt_user:tshirt_password@postgres:5432/tshirt_db
+      JWT_SECRET: replace-with-strong-secret-at-least-32-chars
+      RABBITMQ_URL: amqp://tshirt_app:tshirt_password@rabbitmq:5672/tshirt
+      REDIS_URL: redis://redis:6379
+      REQUIRE_SHARED_JOB_STATE: "true"
+      ALLOW_INMEMORY_JOB_STATE: "false"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  lb:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      api1:
+        condition: service_started
+      api2:
+        condition: service_started
+    ports:
+      - "8189:8080"
+    volumes:
+      - ./nginx/ha.conf:/etc/nginx/nginx.conf:ro
+
+volumes:
+  postgres_data:

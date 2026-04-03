@@ -1,0 +1,29 @@
+route:
+  receiver: default
+  group_by: [alertname, service]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 2h
+  routes:
+    - matchers:
+        - severity="critical"
+      receiver: critical-oncall
+      continue: true
+
+receivers:
+  - name: default
+    webhook_configs:
+      - url: http://example-webhook.local/alerts/default
+        send_resolved: true
+
+  - name: critical-oncall
+    webhook_configs:
+      - url: http://example-webhook.local/alerts/critical
+        send_resolved: true
+
+inhibit_rules:
+  - source_matchers:
+      - severity="critical"
+    target_matchers:
+      - severity="warning"
+    equal: [alertname, service, dependency]

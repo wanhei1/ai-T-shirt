@@ -1,7 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef, useMemo } from "react"
-import apiClient from '@/lib/api-client'
+import apiClient, { type ApiClientError } from '@/lib/api-client'
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
@@ -14,9 +14,18 @@ import { useRouter } from "next/navigation"
 import { useLanguage } from "@/contexts/language-context"
 import { buildCanvasMeta, CANVAS_SIZE, getShirtColorHex, getShirtPhotoSrc } from "@/lib/design-canvas"
 import { hydrateDesignAssets } from "@/lib/design-storage"
+import { pollJobUntilDone } from "@/lib/job-polling"
 import type { DesignData, DesignElement, CanvasMeta } from "@/types/design"
 
 type TryOnModelGender = "male" | "female"
+
+const isAbortLikeError = (error: unknown) => {
+  if (!error) return false
+  if (error instanceof DOMException && error.name === "AbortError") return true
+  if (error instanceof Error && error.name === "AbortError") return true
+  if (error instanceof Error && /任务已取消|aborted|aborterror/i.test(error.message)) return true
+  return false
+}
 const TRYON_MODEL_STORAGE_KEY = "tryOnModelGender"
 const TRYON_CACHE_STORAGE_KEY = "tryOnCacheV1"
 
@@ -95,6 +104,7 @@ export default function PreviewPage() {
   const router = useRouter()
   const { translate } = useLanguage()
   const canvasRef = useRef<HTMLDivElement>(null)
+  const tryOnPollControllerRef = useRef<AbortController | null>(null)
   const [designData, setDesignData] = useState<DesignData | null>(null)
   const [currentView, setCurrentView] = useState<"front" | "back">("front")
   const [isExporting, setIsExporting] = useState(false)
@@ -317,6 +327,47 @@ export default function PreviewPage() {
     return canvas.toDataURL("image/png")
   }
 
+  const renderElementOnlySnapshot = async (side: "front" | "back") => {
+    if (!designData) return null
+
+    const meta = resolvedCanvasMeta
+    const scale = 2
+    const canvas = document.createElement("canvas")
+    canvas.width = Math.max(1, Math.round(meta.printArea.width * scale))
+    canvas.height = Math.max(1, Math.round(meta.printArea.height * scale))
+    const ctx = canvas.getContext("2d")
+    if (!ctx) return null
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height)
+
+    const elements = (designData.elements || []).filter((el) => el.visible && el.side === side)
+    for (const element of elements) {
+      ctx.save()
+      ctx.translate((element.x + element.width / 2) * scale, (element.y + element.height / 2) * scale)
+      ctx.rotate((element.rotation * Math.PI) / 180)
+      ctx.translate((-element.width / 2) * scale, (-element.height / 2) * scale)
+
+      if (element.type === "text") {
+        ctx.fillStyle = element.color || "#111827"
+        ctx.font = `${element.fontSize || 24}px ${element.fontFamily || "Arial"}`
+        ctx.textAlign = "center"
+        ctx.textBaseline = "middle"
+        ctx.fillText(element.content, (element.width * scale) / 2, (element.height * scale) / 2, element.width * scale)
+      } else if (element.content) {
+        try {
+          const img = await loadImage(element.content)
+          ctx.drawImage(img, 0, 0, element.width * scale, element.height * scale)
+        } catch (error) {
+          console.warn("Skip image in element-only snapshot", error)
+        }
+      }
+
+      ctx.restore()
+    }
+
+    return canvas.toDataURL("image/png")
+  }
+
   const estimatedTotal = useMemo(() => {
     if (!designData) return 0
     return Number(designData.selections.price.toFixed(2))
@@ -418,25 +469,36 @@ export default function PreviewPage() {
       reader.readAsDataURL(blob)
     })
 
-  const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
-
   const pollTryOnJob = async (queue: string, jobId: string | number) => {
-    while (true) {
-      const status = await apiClient.getJobStatus(queue, jobId)
-      const job = status.job
-      const state = job?.state
-
-      if (state === "completed") {
-        return job?.result?.imageUrl as string | undefined
-      }
-
-      if (state === "failed") {
-        throw new Error(job?.failedReason || "试穿失败")
-      }
-
-      await delay(1500)
+    if (tryOnPollControllerRef.current && !tryOnPollControllerRef.current.signal.aborted) {
+      tryOnPollControllerRef.current.abort("superseded-by-new-tryon")
     }
+    const controller = new AbortController()
+    tryOnPollControllerRef.current = controller
+
+    return pollJobUntilDone({
+      queue,
+      jobId,
+      fetchStatus: apiClient.getJobStatus.bind(apiClient),
+      getResult: (job) => job?.result?.imageUrl as string | undefined,
+      getFailedReason: (job) => job?.failedReason as string | undefined,
+      timeoutMs: 10 * 60 * 1000,
+      timeoutMessage: "试穿任务等待超时，请稍后重试",
+      signal: controller.signal,
+    })
+      .finally(() => {
+        if (tryOnPollControllerRef.current === controller) {
+          tryOnPollControllerRef.current = null
+        }
+      })
   }
+
+  useEffect(() => {
+    return () => {
+      tryOnPollControllerRef.current?.abort()
+      tryOnPollControllerRef.current = null
+    }
+  }, [])
 
   const resizeDataUrlToTarget = async (dataUrl: string, width = 768, height = 1024): Promise<string> => {
     const img = await loadImage(dataUrl)
@@ -570,6 +632,9 @@ export default function PreviewPage() {
       }
       writeTryOnCache(cache)
     } catch (error) {
+      if (isAbortLikeError(error)) {
+        return
+      }
       setTryOnError(error instanceof Error ? error.message : "试穿失败")
     } finally {
       setIsTryOnLoading(false)
@@ -614,14 +679,17 @@ export default function PreviewPage() {
     try {
       setIsSubmitting(true)
 
-      const [frontSnapshot, backSnapshot] = await Promise.all([
+      const [frontSnapshot, backSnapshot, frontElementSnapshot, backElementSnapshot] = await Promise.all([
         renderSnapshot("front"),
         renderSnapshot("back"),
+        renderElementOnlySnapshot("front"),
+        renderElementOnlySnapshot("back"),
       ])
 
       const canvasForSave: CanvasMeta = {
         ...resolvedCanvasMeta,
         snapshots: { front: frontSnapshot, back: backSnapshot },
+        elementSnapshots: { front: frontElementSnapshot, back: backElementSnapshot },
       }
 
       const getTryOnCache = () => {
@@ -685,8 +753,11 @@ export default function PreviewPage() {
       }, 2000);
     } catch (error) {
       console.error('Order submission failed:', error)
-      const status = (error as { status?: number })?.status
-      const message = (error as Error)?.message || ""
+      const err = error as ApiClientError
+      const status = err?.status
+      const message = err?.message || ""
+      const codeTag = err?.code ? ` [${err.code}]` : ""
+      const requestTag = err?.requestId ? ` (requestId: ${err.requestId})` : ""
       if (status === 403 && message.toLowerCase().includes("membership")) {
         alert(translate({ zh: "需要有效会员才能下单", en: "An active membership is required to place orders." }))
         router.push("/membership")
@@ -702,7 +773,7 @@ export default function PreviewPage() {
         router.push("/membership")
         return
       }
-      alert(translate({ zh: "下单失败，请重试", en: "Failed to place order. Please try again." }))
+      alert(`${translate({ zh: "下单失败，请重试", en: "Failed to place order. Please try again." })}${codeTag}${requestTag}`)
     } finally {
       setIsSubmitting(false)
     }

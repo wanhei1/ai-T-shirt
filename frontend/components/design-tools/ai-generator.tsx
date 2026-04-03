@@ -2,7 +2,7 @@
 
 import type React from "react"
 
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Textarea } from "@/components/ui/textarea"
@@ -14,7 +14,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Sparkles, Loader2, Download, Palette } from "lucide-react"
 import Link from "next/link"
 import { useLanguage, type LanguageText } from "@/contexts/language-context"
-import apiClient from "@/lib/api-client"
+import apiClient, { type ApiClientError } from "@/lib/api-client"
+import { pollJobUntilDone } from "@/lib/job-polling"
 
 interface AIGeneratorProps {
   onImageGenerated: (imageUrl: string) => void
@@ -38,6 +39,52 @@ const styleOptions: Array<{ value: string; label: LanguageText; description: Lan
   { value: "abstract", label: { zh: "抽象", en: "Abstract" }, description: { zh: "抽象艺术风格", en: "Abstract art style" } },
   { value: "minimalist", label: { zh: "简约", en: "Minimalist" }, description: { zh: "干净极简设计", en: "Clean minimal design" } },
   { value: "vintage", label: { zh: "复古", en: "Vintage" }, description: { zh: "复古怀旧风", en: "Retro vintage look" } },
+]
+
+const stylePromptTemplates: Record<string, { positive: string; negative: string }> = {
+  realistic: {
+    positive:
+      "masterpiece, best quality, RAW photo, photorealistic, ultra detailed, 8k uhd, sharp focus, centered composition",
+    negative:
+      "worst quality, low quality, normal quality, lowres, blurry, noisy, jpeg artifacts, bad anatomy, deformed, text, watermark, logo, frame",
+  },
+  cartoon: {
+    positive:
+      "masterpiece, best quality, cartoon illustration, clean lineart, bold outlines, cel shading, flat vibrant colors, sticker style",
+    negative:
+      "photorealistic, realistic skin, muddy colors, messy lineart, complex background, blurry, text, watermark, logo, frame",
+  },
+  anime: {
+    positive:
+      "masterpiece, best quality, anime style illustration, detailed lineart, cel shading, vibrant colors, sharp eyes, clean contour",
+    negative:
+      "photorealistic, 3d render, western comic style, lowres, blurry, messy sketch, text, watermark, logo, frame, busy background",
+  },
+  abstract: {
+    positive:
+      "masterpiece, best quality, abstract graphic art, geometric rhythm, high contrast, balanced composition, clean visual hierarchy",
+    negative:
+      "photorealistic face, lowres, muddy tones, random noise, chaotic composition, blurry, text, watermark, logo, frame",
+  },
+  minimalist: {
+    positive:
+      "masterpiece, best quality, minimalist graphic design, clean geometry, strong negative space, limited palette, crisp edges",
+    negative:
+      "overdetailed, cluttered, noisy texture, photorealistic, gradients banding, lowres, blurry, text, watermark, logo, frame",
+  },
+  vintage: {
+    positive:
+      "masterpiece, best quality, vintage retro poster style, muted retro palette, halftone grain, nostalgic tone, balanced composition",
+    negative:
+      "modern ui, neon cyberpunk, oversaturated modern look, lowres, blurry, overexposed, text, watermark, logo, frame, messy background",
+  },
+}
+
+const modelOptions: Array<{ value: string; label: string }> = [
+  { value: "sd_xl_base_1.0.safetensors", label: "SDXL Base 1.0" },
+  { value: "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors", label: "Juggernaut XL v9" },
+  { value: "dreamshaper_8.safetensors", label: "DreamShaper 8" },
+  { value: "RealVisXL_V5.0.safetensors", label: "RealVisXL V5" },
 ]
 
 export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
@@ -65,13 +112,18 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
     cfg: 8,
     seed: "",
     denoise: 1,
-    modelName: "dreamshaper_8.safetensors",
+    modelName: "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors",
     samplerName: "euler",
     scheduler: "normal",
     negativePrompt: "",
   })
+  const [selectedModelOption, setSelectedModelOption] = useState(advanced.modelName)
+  const activePollControllerRef = useRef<AbortController | null>(null)
 
-  const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+  useEffect(() => {
+    const hasPreset = modelOptions.some((option) => option.value === advanced.modelName)
+    setSelectedModelOption(hasPreset ? advanced.modelName : "__custom__")
+  }, [advanced.modelName])
 
   const loadImage = (src: string) =>
     new Promise<HTMLImageElement>((resolve, reject) => {
@@ -191,14 +243,26 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
     setQueueHint(null)
     setGenerationProgress("正在排队...")
     setGenerationPercent(5)
+
+    activePollControllerRef.current?.abort()
+    const pollController = new AbortController()
+    activePollControllerRef.current = pollController
     
     try {
       setGenerationProgress("正在提交任务...")
 
+      const cleanedPrompt = prompt.trim()
+      const styleTemplate = stylePromptTemplates[style] || stylePromptTemplates.realistic
+      const finalPrompt = `${cleanedPrompt}, ${styleTemplate.positive}`
+      const finalNegativePrompt = [styleTemplate.negative, advanced.negativePrompt]
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .join(", ")
+
       const jobResp = await apiClient.createJob({
         type: "ai-image",
         payload: {
-          prompt,
+          prompt: finalPrompt,
           style,
           width: advanced.width,
           height: advanced.height,
@@ -208,7 +272,7 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
           modelName: advanced.modelName,
           samplerName: advanced.samplerName,
           scheduler: advanced.scheduler,
-          negativePrompt: advanced.negativePrompt || undefined,
+          negativePrompt: finalNegativePrompt || undefined,
           seed: advanced.seed.trim() ? Number.parseInt(advanced.seed, 10) : undefined,
         },
       })
@@ -226,60 +290,55 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
 
       setGenerationProgress("任务已入队，等待执行...")
 
-      while (true) {
-        const status = await apiClient.getJobStatus(queue, jobId)
-        const job = status.job
-        const state = job?.state
-        const progress = typeof job?.progress === "number" ? job.progress : 0
-
-        if (progress > 0) {
-          setGenerationPercent(Math.min(100, Math.max(progress, 5)))
-        }
-
-        if (state === "completed") {
-          const imageUrl = job?.result?.imageUrl
-          if (!imageUrl) {
-            throw new Error("生成结果为空")
+      const imageUrl = await pollJobUntilDone({
+        queue,
+        jobId,
+        fetchStatus: apiClient.getJobStatus.bind(apiClient),
+        getResult: (job) => job?.result?.imageUrl as string | undefined,
+        getFailedReason: (job) => job?.failedReason as string | undefined,
+        timeoutMs: 8 * 60 * 1000,
+        timeoutMessage: "任务等待超时，请稍后重试",
+        signal: pollController.signal,
+        onProgress: ({ state, progress }) => {
+          if (progress > 0) {
+            setGenerationPercent(Math.min(100, Math.max(progress, 5)))
           }
+          setGenerationProgress(state === "active" ? "正在生成..." : "排队中...")
+        },
+      })
 
-          setGenerationProgress("正在去除背景...")
-          const transparentImageUrl = await removeBackgroundToTransparent(imageUrl).catch(() => imageUrl)
+      setGenerationProgress("正在去除背景...")
+      const transparentImageUrl = await removeBackgroundToTransparent(imageUrl).catch(() => imageUrl)
 
-          setErrorAction(null)
-          setGenerationProgress("生成完成！")
-          setGenerationPercent(100)
+      setErrorAction(null)
+      setGenerationProgress("生成完成！")
+      setGenerationPercent(100)
 
-          const newImage = {
-            url: transparentImageUrl,
-            prompt,
-            style,
-            timestamp: Date.now(),
-          }
-
-          if (typeof window !== "undefined") {
-            try {
-              window.localStorage.setItem("designCategory", style)
-            } catch {
-              // ignore storage failures
-            }
-          }
-
-          setGeneratedImages((prev) => [newImage, ...prev])
-          setPrompt("")
-          setQueueHint(null)
-          break
-        }
-
-        if (state === "failed") {
-          throw new Error(job?.failedReason || "生成失败")
-        }
-
-        setGenerationProgress(state === "active" ? "正在生成..." : "排队中...")
-        await delay(1500)
+      const newImage = {
+        url: transparentImageUrl,
+        prompt,
+        style,
+        timestamp: Date.now(),
       }
+
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage.setItem("designCategory", style)
+        } catch {
+          // ignore storage failures
+        }
+      }
+
+      setGeneratedImages((prev) => [newImage, ...prev])
+      setPrompt("")
+      setQueueHint(null)
     } catch (error) {
       console.error("Generation error:", error)
-      const err = error as Error & { status?: number }
+      const isCanceled = error instanceof Error && error.message.includes("任务已取消")
+      if (isCanceled) {
+        return
+      }
+      const err = error as ApiClientError
       if (err?.status === 401) {
         setErrorAction("login")
       }
@@ -287,11 +346,16 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
         setErrorAction("membership")
       }
       const errorMessage = err instanceof Error ? err.message : "未知错误"
-      setError(`生成失败: ${errorMessage}`)
+      const errorCode = err?.code ? ` [${err.code}]` : ""
+      const requestId = err?.requestId ? ` (requestId: ${err.requestId})` : ""
+      setError(`生成失败${errorCode}: ${errorMessage}${requestId}`)
       setGenerationProgress("")
       setGenerationPercent(0)
       setQueueHint(null)
     } finally {
+      if (activePollControllerRef.current === pollController) {
+        activePollControllerRef.current = null
+      }
       setIsGenerating(false)
 
       // 清除进度状态
@@ -303,7 +367,10 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
   }
 
   useEffect(() => {
-    return () => {}
+    return () => {
+      activePollControllerRef.current?.abort()
+      activePollControllerRef.current = null
+    }
   }, [])
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -506,11 +573,38 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
                 </div>
                 <div className="col-span-2">
                   <Label>Model</Label>
-                  <Input
-                    type="text"
-                    value={advanced.modelName}
-                    onChange={(e) => setAdvanced((prev) => ({ ...prev, modelName: e.target.value }))}
-                  />
+                  <Select
+                    value={selectedModelOption}
+                    onValueChange={(value) => {
+                      setSelectedModelOption(value)
+                      if (value !== "__custom__") {
+                        setAdvanced((prev) => ({ ...prev, modelName: value }))
+                      }
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder={translate({ zh: "选择模型", en: "Select model" })} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {modelOptions.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                      <SelectItem value="__custom__">
+                        {translate({ zh: "自定义模型名", en: "Custom model" })}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                  {selectedModelOption === "__custom__" ? (
+                    <Input
+                      className="mt-2"
+                      type="text"
+                      placeholder={translate({ zh: "输入 checkpoints 文件名", en: "Enter checkpoint filename" })}
+                      value={advanced.modelName}
+                      onChange={(e) => setAdvanced((prev) => ({ ...prev, modelName: e.target.value.trim() }))}
+                    />
+                  ) : null}
                 </div>
                 <div className="col-span-2">
                   <Label>

@@ -122,7 +122,7 @@ export class UserModel {
     }
 
     async findUserByEmail(email: string) {
-        const query = 'SELECT * FROM users WHERE email = $1';
+        const query = 'SELECT * FROM users WHERE LOWER(TRIM(email)) = LOWER(TRIM($1))';
         const values = [email];
 
         const result = await this.pool.query(query, values);
@@ -224,6 +224,19 @@ export class OrderModel {
     async getOrdersByUserId(userId: number) {
         const query = `SELECT id, user_id, total, category, status, items, selections, design, shipping_info, address, phone, order_time, canvas_front, canvas_back, canvas_meta, source_all_id, created_at FROM orders WHERE user_id = $1 ORDER BY created_at DESC`;
         const result = await this.pool.query(query, [userId]);
+        return result.rows || [];
+    }
+
+    async getOrderSummariesByUserId(userId: number, limit = 30) {
+        const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.trunc(limit))) : 30;
+        const query = `
+            SELECT id, created_at, status, canvas_front, canvas_back
+            FROM orders
+            WHERE user_id = $1
+            ORDER BY created_at DESC
+            LIMIT $2
+        `;
+        const result = await this.pool.query(query, [userId, safeLimit]);
         return result.rows || [];
     }
 

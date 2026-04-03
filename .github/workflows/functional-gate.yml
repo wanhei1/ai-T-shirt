@@ -1,0 +1,69 @@
+name: Functional Gate
+
+on:
+  pull_request:
+    paths:
+      - frontend/**
+      - backend/**
+      - shared/**
+      - package.json
+      - package-lock.json
+      - .github/workflows/functional-gate.yml
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - frontend/**
+      - backend/**
+      - shared/**
+      - package.json
+      - package-lock.json
+      - .github/workflows/functional-gate.yml
+  workflow_dispatch:
+
+jobs:
+  verify-functional:
+    name: Verify Functional Pipeline
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: tshirt_designer
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d tshirt_designer"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/tshirt_designer
+      NODE_ENV: test
+      JWT_SECRET: ci-functional-gate-jwt-secret-min-32-chars
+      RUN_STARTUP_MIGRATIONS: true
+      MIGRATION_ONLY: true
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate strict env policy
+        run: npm run security:validate-env:strict
+
+      - name: Run functional verification
+        run: npm run verify:functional

@@ -38,7 +38,10 @@ type AdminOrder = {
       side?: string;
       visible?: boolean;
     }>;
-    canvas?: { snapshots?: { front?: string | null; back?: string | null } };
+    canvas?: {
+      snapshots?: { front?: string | null; back?: string | null };
+      elementSnapshots?: { front?: string | null; back?: string | null };
+    };
   } | null;
   user_name?: string | null;
   user_email?: string | null;
@@ -255,6 +258,8 @@ export default function AdminPage() {
                     {(() => {
                       const frontCanvas = order.design?.canvas?.snapshots?.front || null;
                       const backCanvas = order.design?.canvas?.snapshots?.back || null;
+                      const frontElementOnly = order.design?.canvas?.elementSnapshots?.front || null;
+                      const backElementOnly = order.design?.canvas?.elementSnapshots?.back || null;
                       const frontTryOn = order.canvas_front || null;
                       const backTryOn = order.canvas_back || null;
                       return (
@@ -288,6 +293,46 @@ export default function AdminPage() {
                                       variant="outline"
                                       size="sm"
                                       onClick={() => downloadImage(backCanvas, `order-${order.id}-canvas-back.png`)}
+                                    >
+                                      下载
+                                    </Button>
+                                  </>
+                                ) : (
+                                  <div className="h-36 w-full rounded-md border flex items-center justify-center text-xs text-muted-foreground">无</div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+
+                          <div>
+                            <div className="mb-2 text-sm font-medium text-foreground">纯元素图（画布框内）</div>
+                            <div className="grid grid-cols-2 gap-3">
+                              <div className="space-y-2">
+                                <div className="text-xs text-muted-foreground">正面元素</div>
+                                {frontElementOnly ? (
+                                  <>
+                                    <img src={frontElementOnly} alt={`order-${order.id}-elements-front`} className="h-36 w-full rounded-md border object-contain" />
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => downloadImage(frontElementOnly, `order-${order.id}-elements-front.png`)}
+                                    >
+                                      下载
+                                    </Button>
+                                  </>
+                                ) : (
+                                  <div className="h-36 w-full rounded-md border flex items-center justify-center text-xs text-muted-foreground">无</div>
+                                )}
+                              </div>
+                              <div className="space-y-2">
+                                <div className="text-xs text-muted-foreground">背面元素</div>
+                                {backElementOnly ? (
+                                  <>
+                                    <img src={backElementOnly} alt={`order-${order.id}-elements-back`} className="h-36 w-full rounded-md border object-contain" />
+                                    <Button
+                                      variant="outline"
+                                      size="sm"
+                                      onClick={() => downloadImage(backElementOnly, `order-${order.id}-elements-back.png`)}
                                     >
                                       下载
                                     </Button>

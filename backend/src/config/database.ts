@@ -3,32 +3,74 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const connectToDatabase = async () => {
-    const poolConfig: any = {
-        connectionString: process.env.DATABASE_URL,
-        max: 20, // 最大连接数
-        idleTimeoutMillis: 30000, // 连接空闲时间（毫秒）
-        connectionTimeoutMillis: 10000, // 连接超时时间（毫秒）
-    };
+const parseCandidates = (multiValue?: string, singleValue?: string, fallback: string[] = []) => {
+    const multi = (multiValue || '')
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+    const single = (singleValue || '').trim();
+    const merged = [...multi, ...(single ? [single] : []), ...fallback];
+    return Array.from(new Set(merged));
+};
 
-    if (process.env.DATABASE_URL && process.env.DATABASE_URL.includes('sslmode=require')) {
-        poolConfig.ssl = {
-            rejectUnauthorized: false // Neon DB requires SSL but often self-signed in dev/pooler
+const createPoolFromCandidates = async (candidates: string[], label: string) => {
+    if (candidates.length === 0) {
+        throw new Error(`No ${label} database endpoint configured.`);
+    }
+
+    let lastError: unknown = null;
+
+    for (const candidate of candidates) {
+        const poolConfig: any = {
+            connectionString: candidate,
+            max: 20,
+            idleTimeoutMillis: 30000,
+            connectionTimeoutMillis: 10000,
         };
+
+        if (candidate.includes('sslmode=require')) {
+            poolConfig.ssl = {
+                rejectUnauthorized: false
+            };
+        }
+
+        const pool = new Pool(poolConfig);
+
+        try {
+            const client = await pool.connect();
+            console.log(`Connected to ${label} database successfully (${candidate})`);
+            client.release();
+            return pool;
+        } catch (error) {
+            lastError = error;
+            console.error(`${label} database connection failed for ${candidate}:`, error);
+            await pool.end().catch(() => undefined);
+        }
     }
 
-    const pool = new Pool(poolConfig);
+    throw new Error(
+        `Unable to connect to any configured ${label} database endpoints: ${candidates.join(', ')}. Last error: ${
+            lastError instanceof Error ? lastError.message : String(lastError)
+        }`
+    );
+};
 
-    try {
-        const client = await pool.connect();
-        console.log('Connected to the database successfully');
-        client.release(); // 释放客户端回连接池
-    } catch (error) {
-        console.error('Database connection error:', error);
-        throw error;
+const connectToDatabase = async () => {
+    const candidates = parseCandidates(
+        process.env.DATABASE_URLS,
+        process.env.DATABASE_URL,
+        []
+    );
+
+    return createPoolFromCandidates(candidates, 'primary');
+};
+
+export const connectToReadDatabase = async (): Promise<Pool | null> => {
+    const readCandidates = parseCandidates(process.env.DATABASE_READ_URLS, process.env.DATABASE_READ_URL, []);
+    if (readCandidates.length === 0) {
+        return null;
     }
-
-    return pool;
+    return createPoolFromCandidates(readCandidates, 'read-replica');
 };
 
 export default connectToDatabase;

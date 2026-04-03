@@ -5,6 +5,9 @@ const distDir = process.env.NEXT_DIST_DIR || `.next-${safeUser}`;
 
 const nextConfig = {
   distDir,
+  experimental: {
+    proxyClientMaxBodySize: "50mb",
+  },
   typescript: {
     ignoreBuildErrors: true,
   },
@@ -12,7 +15,10 @@ const nextConfig = {
     unoptimized: true,
   },
   async rewrites() {
-    const backendTarget = process.env.NEXT_INTERNAL_API_PROXY || "http://127.0.0.1:8185";
+    const publicApi = process.env.NEXT_PUBLIC_API_URL
+      ? String(process.env.NEXT_PUBLIC_API_URL).split(",")[0]?.trim()
+      : "";
+    const backendTarget = process.env.NEXT_INTERNAL_API_PROXY || publicApi || "http://127.0.0.1:8185";
     return [
       {
         source: "/backend/:path*",

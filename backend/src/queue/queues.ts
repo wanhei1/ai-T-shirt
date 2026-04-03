@@ -1,6 +1,7 @@
 import * as amqp from "amqplib";
 import { randomUUID } from "crypto";
 import { getRabbitConnection } from "./connection";
+import { createJobStateRepository } from "./state-repository";
 
 export const AI_QUEUE_NAME = "ai-image";
 export const TRYON_QUEUE_NAME = "virtual-tryon";
@@ -9,7 +10,7 @@ export type QueueName = typeof AI_QUEUE_NAME | typeof TRYON_QUEUE_NAME;
 
 export type JobState = "waiting" | "active" | "completed" | "failed" | "delayed" | "paused";
 
-type JobRecord = {
+export type JobRecord = {
   id: string;
   queue: QueueName;
   state: JobState;
@@ -24,7 +25,7 @@ type JobRecord = {
   logs: string[];
 };
 
-type QueueStats = {
+export type QueueStats = {
   waiting: number;
   active: number;
   completed: number;
@@ -43,6 +44,20 @@ const queueRefs = {
 const jobStore: Record<QueueName, Map<string, JobRecord>> = {
   [AI_QUEUE_NAME]: new Map(),
   [TRYON_QUEUE_NAME]: new Map(),
+};
+
+const stateRepository = createJobStateRepository(jobStore);
+let stateRepositoryReady: Promise<void> | null = null;
+
+const ensureStateRepository = async () => {
+  if (!stateRepositoryReady) {
+    stateRepositoryReady = stateRepository.init();
+  }
+  await stateRepositoryReady;
+};
+
+export const initializeQueueStateRepository = async () => {
+  await ensureStateRepository();
 };
 
 const isQueueName = (name: string): name is QueueName => name === AI_QUEUE_NAME || name === TRYON_QUEUE_NAME;
@@ -65,13 +80,9 @@ export const getQueueByName = (name: string) => {
   return queueRefs[name];
 };
 
-export const addJobLog = (queue: QueueName, jobId: string, message: string) => {
-  const job = jobStore[queue].get(jobId);
-  if (!job) return;
-  job.logs.push(`[${new Date().toISOString()}] ${message}`);
-  if (job.logs.length > 200) {
-    job.logs = job.logs.slice(-200);
-  }
+export const addJobLog = async (queue: QueueName, jobId: string, message: string) => {
+  await ensureStateRepository();
+  await stateRepository.addJobLog(queue, jobId, message);
 };
 
 export const updateJobState = (
@@ -79,29 +90,24 @@ export const updateJobState = (
   jobId: string,
   patch: Partial<Pick<JobRecord, "state" | "progress" | "result" | "failedReason" | "attemptsMade" | "finishedAt">>
 ) => {
-  const job = jobStore[queue].get(jobId);
-  if (!job) return;
-  Object.assign(job, patch);
+  return (async () => {
+    await ensureStateRepository();
+    await stateRepository.updateJobState(queue, jobId, patch);
+  })();
 };
 
-export const getJobById = (queue: QueueName, jobId: string) => {
-  return jobStore[queue].get(jobId) || null;
+export const getJobById = async (queue: QueueName, jobId: string) => {
+  await ensureStateRepository();
+  return stateRepository.getJobById(queue, jobId);
 };
 
-export const getQueueStats = (queue: QueueName): QueueStats => {
-  const stats: QueueStats = { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0, paused: 0 };
-  for (const job of jobStore[queue].values()) {
-    if (job.state === "waiting") stats.waiting += 1;
-    else if (job.state === "active") stats.active += 1;
-    else if (job.state === "completed") stats.completed += 1;
-    else if (job.state === "failed") stats.failed += 1;
-    else if (job.state === "delayed") stats.delayed += 1;
-    else if (job.state === "paused") stats.paused += 1;
-  }
-  return stats;
+export const getQueueStats = async (queue: QueueName): Promise<QueueStats> => {
+  await ensureStateRepository();
+  return stateRepository.getQueueStats(queue);
 };
 
 export const enqueueJob = async (queue: QueueName, data: any, options?: { attempts?: number }) => {
+  await ensureStateRepository();
   const channel = await ensurePublisherChannel();
   const jobId = randomUUID();
   const maxAttempts = Math.max(1, options?.attempts ?? 1);
@@ -121,8 +127,8 @@ export const enqueueJob = async (queue: QueueName, data: any, options?: { attemp
     logs: [],
   };
 
-  jobStore[queue].set(jobId, record);
-  addJobLog(queue, jobId, "Job queued");
+  await stateRepository.createJob(queue, record);
+  await addJobLog(queue, jobId, "Job queued");
 
   const payload = Buffer.from(
     JSON.stringify({
@@ -136,7 +142,7 @@ export const enqueueJob = async (queue: QueueName, data: any, options?: { attemp
 
   const ok = channel.sendToQueue(queue, payload, { persistent: true });
   if (!ok) {
-    addJobLog(queue, jobId, "Publish buffered by broker");
+    await addJobLog(queue, jobId, "Publish buffered by broker");
   }
 
   return { id: jobId, queue };

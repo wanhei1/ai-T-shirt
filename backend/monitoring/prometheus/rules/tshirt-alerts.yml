@@ -1,0 +1,144 @@
+groups:
+  - name: tshirt-api-slo
+    rules:
+      - alert: ApiHighErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(http_requests_total[5m])), 1)
+          ) > 0.02
+        for: 10m
+        labels:
+          severity: critical
+          service: backend-api
+          slo: availability
+        annotations:
+          summary: API 5xx ratio above 2% for 10m
+          description: Error budget burn is too fast for 99.9% monthly availability target.
+          runbook: docs/OBSERVABILITY_ONCALL_RUNBOOK.md#apihigherrorrate
+
+      - alert: ApiHighLatencyP95
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(http_request_duration_seconds_bucket[5m]))
+          ) > 1
+        for: 10m
+        labels:
+          severity: warning
+          service: backend-api
+          slo: latency
+        annotations:
+          summary: API p95 latency above 1s for 10m
+          description: Request latency exceeds target threshold and may impact user flow.
+          runbook: docs/OBSERVABILITY_ONCALL_RUNBOOK.md#apihighlatencyp95
+
+      - alert: CacheHitRateLow
+        expr: |
+          (
+            sum(rate(cache_requests_total{result="hit"}[15m]))
+            /
+            clamp_min(sum(rate(cache_requests_total{result=~"hit|miss"}[15m])), 1)
+          ) < 0.6
+          and sum(rate(cache_requests_total{result=~"hit|miss"}[15m])) > 1
+        for: 15m
+        labels:
+          severity: warning
+          service: backend-api
+          slo: cache-efficiency
+        annotations:
+          summary: Global cache hit ratio below 60% for 15m
+          description: Cache efficiency is degraded and database backsource pressure may increase.
+          runbook: docs/OBSERVABILITY_ONCALL_RUNBOOK.md#cachehitratelow
+
+  - name: tshirt-worker
+    rules:
+      - alert: QueueBacklogGrowing
+        expr: sum(queue_depth) > 200
+        for: 10m
+        labels:
+          severity: warning
+          service: worker
+        annotations:
+          summary: Queue backlog over 200 for 10m
+          description: Workers are not draining queue fast enough.
+          runbook: docs/OBSERVABILITY_ONCALL_RUNBOOK.md#queuebackloggrowing
+
+      - alert: QueueWaitP95TooHigh
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (rate(job_queue_wait_duration_seconds_bucket[5m]))
+          ) > 120
+        for: 10m
+        labels:
+          severity: critical
+          service: worker
+          slo: queue-wait
+        annotations:
+          summary: Queue wait p95 above 120s for 10m
+          description: Job scheduling delay is violating async processing SLO.
+          runbook: docs/OBSERVABILITY_ONCALL_RUNBOOK.md#queuewaitp95toohigh
+
+      - alert: WorkerFailureRateHigh
+        expr: |
+          (
+            sum(rate(jobs_failed_total[10m]))
+            /
+            clamp_min(sum(rate(jobs_completed_total[10m])) + sum(rate(jobs_failed_total[10m])), 1)
+          ) > 0.1
+        for: 10m
+        labels:
+          severity: warning
+          service: worker
+        annotations:
+          summary: Worker failure ratio above 10% for 10m
+          description: Job processing reliability is degraded.
+          runbook: docs/OBSERVABILITY_ONCALL_RUNBOOK.md#workerfailureratehigh
+
+  - name: tshirt-dependencies
+    rules:
+      - alert: DependencyDown
+        expr: dependency_up == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: backend
+        annotations:
+          summary: Dependency {{ $labels.dependency }} is down
+          description: Connectivity probe reports dependency unavailable for 2m.
+          runbook: docs/OBSERVABILITY_ONCALL_RUNBOOK.md#dependencydown
+
+      - alert: DependencyCheckSlow
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (dependency, le) (rate(dependency_check_duration_seconds_bucket[5m]))
+          ) > 0.5
+        for: 10m
+        labels:
+          severity: warning
+          service: backend
+        annotations:
+          summary: Dependency probe p95 duration above 500ms
+          description: One or more dependencies are responding slowly and risk cascading latency.
+          runbook: docs/OBSERVABILITY_ONCALL_RUNBOOK.md#dependencycheckslow
+
+  - name: tshirt-ai
+    rules:
+      - alert: ComfyUiFailureRateHigh
+        expr: |
+          (
+            sum(rate(comfyui_requests_total{status="failed"}[10m]))
+            /
+            clamp_min(sum(rate(comfyui_requests_total[10m])), 1)
+          ) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+          service: comfyui
+        annotations:
+          summary: ComfyUI failure ratio above 20% for 10m
+          description: Image generation provider has elevated failures.
+          runbook: docs/OBSERVABILITY_ONCALL_RUNBOOK.md#comfyuifailureratehigh

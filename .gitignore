@@ -17,6 +17,13 @@
 /build
 **/build
 
+# generated externalized assets
+storage/assets/
+backend/storage/assets/
+
+# generated capacity test artifacts
+artifacts/perf/
+
 # compiled output
 dist/
 **/dist/
