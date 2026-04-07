@@ -26,3 +26,10 @@ promtool check rules backend/monitoring/prometheus/rules/tshirt-alerts.yml
 2. Generate synthetic 5xx traffic to trigger `ApiHighErrorRate`.
 3. Reduce worker count to trigger `QueueBacklogGrowing`.
 4. Confirm alerts route to correct receiver and incident workflow starts.
+
+## 6) DR target alignment drills
+
+1. Run `npm run dr:readiness` and ensure multi-AZ endpoint checks pass.
+2. Run `npm run dr:drill:az` to generate AZ failover RTO evidence under `artifacts/dr/`.
+3. Run `npm run dr:drill:cross-region` with backup/outage timestamps to validate RTO/RPO objectives.
+4. Confirm `CoreTransactionRtoRisk`, `CoreTransactionRtoBreach`, and `AiAsyncRtoBreach` alerts are visible in Alertmanager.

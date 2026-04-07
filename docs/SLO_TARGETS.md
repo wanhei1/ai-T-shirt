@@ -32,3 +32,7 @@ These SLOs apply to backend API, async worker pipeline, and dependency availabil
 4. ComfyUI success/failure ratio and duration.
 5. Cache hit ratio by route: `sum(rate(cache_requests_total{result="hit"}[5m])) by (route) / clamp_min(sum(rate(cache_requests_total{result=~"hit|miss"}[5m])) by (route), 1)`.
 6. Cache backsource QPS by route: `sum(rate(cache_backsource_total[5m])) by (route)`.
+7. DR RTO risk panel: `dependency_up{dependency=~"postgres|redis|rabbitmq"}` with 10m/15m/60m alert overlays.
+8. Weekly unit cost report: `artifacts/cost/` output from `npm run cost:report` (AI/Try-on USD per 1k) and threshold trend.
+
+See DR target details in `docs/DR_MULTI_AZ_CROSS_REGION_STRATEGY.md`, operational procedures in `docs/DR_RUNBOOK.md`, and cost model definitions in `docs/COST_OBSERVABILITY_AND_UNIT_ECONOMICS.md`.

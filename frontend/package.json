@@ -3,12 +3,15 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "prebuild": "npm --prefix ../shared run build",
+    "predev": "npm --prefix ../shared run build",
     "build": "next build",
     "dev": "next dev -p 3007",
     "lint": "next lint",
     "start": "next start"
   },
   "dependencies": {
+    "@v0-t-shirt-design-editor/shared": "*",
     "@hookform/resolvers": "^3.10.0",
     "@radix-ui/react-accordion": "1.2.2",
     "@radix-ui/react-alert-dialog": "1.1.4",

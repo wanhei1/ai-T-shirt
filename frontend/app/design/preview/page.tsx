@@ -635,6 +635,16 @@ export default function PreviewPage() {
       if (isAbortLikeError(error)) {
         return
       }
+      const err = error as ApiClientError
+      if (err?.code === "AI_DISABLED") {
+        setTryOnError(
+          translate({
+            zh: "AI 定制功能暂时关闭，试穿不可用。请先完成模板设计或稍后再试。",
+            en: "AI customization is temporarily disabled. Virtual try-on is unavailable for now.",
+          })
+        )
+        return
+      }
       setTryOnError(error instanceof Error ? error.message : "试穿失败")
     } finally {
       setIsTryOnLoading(false)

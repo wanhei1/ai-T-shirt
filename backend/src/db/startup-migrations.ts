@@ -162,6 +162,34 @@ const ensureOrderAndDesignTables = async (pool: Pool) => {
         console.warn('⚠️ Failed to ensure orders address/phone/order_time columns:', (err as any)?.message || err);
     }
 
+    // Day 1 payment model: separate payment state from fulfillment/order state.
+    try {
+        await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_status VARCHAR(32) NOT NULL DEFAULT 'pending'`);
+        await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_channel VARCHAR(32)`);
+        await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS payment_order_id VARCHAR(128)`);
+        await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS paid_at TIMESTAMP`);
+        await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS refund_status VARCHAR(32) NOT NULL DEFAULT 'none'`);
+        await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS refunded_at TIMESTAMP`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_payment_status_created_at_desc ON orders(payment_status, created_at DESC)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_payment_order_id ON orders(payment_order_id)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_refund_status_created_at_desc ON orders(refund_status, created_at DESC)`);
+    } catch (err) {
+        console.warn('⚠️ Failed to ensure orders payment columns/indexes:', (err as any)?.message || err);
+    }
+
+    // Day 6 make-to-order fields: sku snapshot and promised production/shipment time.
+    try {
+        await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS sku_id INTEGER`);
+        await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS sku_snapshot JSONB`);
+        await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS production_slot_date DATE`);
+        await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS production_due_at TIMESTAMP`);
+        await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS promised_ship_at TIMESTAMP`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_production_slot_date ON orders(production_slot_date)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_promised_ship_at ON orders(promised_ship_at)`);
+    } catch (err) {
+        console.warn('⚠️ Failed to ensure orders make-to-order columns/indexes:', (err as any)?.message || err);
+    }
+
     // Ensure category exists for older installations (used as style tag, e.g. 抽象/写实/简约)
     try {
         await pool.query(`ALTER TABLE orders ADD COLUMN IF NOT EXISTS category TEXT`);
@@ -209,6 +237,168 @@ const ensureOrderAndDesignTables = async (pool: Pool) => {
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_orders_archive_status_created_at_desc ON orders_archive(status, created_at DESC)`);
     } catch (err) {
         console.warn('⚠️ Failed to ensure orders_archive indexes:', (err as any)?.message || err);
+    }
+
+    // Order idempotency keys: ensure one logical create-order request writes at most once.
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS order_idempotency_keys (
+            id SERIAL PRIMARY KEY,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            endpoint VARCHAR(64) NOT NULL,
+            idempotency_key VARCHAR(128) NOT NULL,
+            request_hash CHAR(64) NOT NULL,
+            status VARCHAR(16) NOT NULL DEFAULT 'pending',
+            response_status INTEGER,
+            response_body JSONB,
+            created_order_ids JSONB,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (user_id, endpoint, idempotency_key)
+        )
+    `);
+    try {
+        await pool.query(`ALTER TABLE order_idempotency_keys ADD COLUMN IF NOT EXISTS request_hash CHAR(64)`);
+        await pool.query(`ALTER TABLE order_idempotency_keys ADD COLUMN IF NOT EXISTS status VARCHAR(16) NOT NULL DEFAULT 'pending'`);
+        await pool.query(`ALTER TABLE order_idempotency_keys ADD COLUMN IF NOT EXISTS response_status INTEGER`);
+        await pool.query(`ALTER TABLE order_idempotency_keys ADD COLUMN IF NOT EXISTS response_body JSONB`);
+        await pool.query(`ALTER TABLE order_idempotency_keys ADD COLUMN IF NOT EXISTS created_order_ids JSONB`);
+        await pool.query(`ALTER TABLE order_idempotency_keys ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_order_idempotency_user_created_at ON order_idempotency_keys(user_id, created_at DESC)`);
+    } catch (err) {
+        console.warn('⚠️ Failed to ensure order_idempotency_keys columns/indexes:', (err as any)?.message || err);
+    }
+
+    // Daily AI budget counters: enforce per-user and global daily quotas.
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS ai_budget_daily_counters (
+            id SERIAL PRIMARY KEY,
+            usage_date DATE NOT NULL,
+            operation VARCHAR(32) NOT NULL,
+            scope VARCHAR(16) NOT NULL,
+            user_key INTEGER NOT NULL,
+            user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+            used_count INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (usage_date, operation, scope, user_key)
+        )
+    `);
+    try {
+        await pool.query(`ALTER TABLE ai_budget_daily_counters ADD COLUMN IF NOT EXISTS usage_date DATE`);
+        await pool.query(`ALTER TABLE ai_budget_daily_counters ADD COLUMN IF NOT EXISTS operation VARCHAR(32)`);
+        await pool.query(`ALTER TABLE ai_budget_daily_counters ADD COLUMN IF NOT EXISTS scope VARCHAR(16)`);
+        await pool.query(`ALTER TABLE ai_budget_daily_counters ADD COLUMN IF NOT EXISTS user_key INTEGER`);
+        await pool.query(`ALTER TABLE ai_budget_daily_counters ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`);
+        await pool.query(`ALTER TABLE ai_budget_daily_counters ADD COLUMN IF NOT EXISTS used_count INTEGER NOT NULL DEFAULT 0`);
+        await pool.query(`ALTER TABLE ai_budget_daily_counters ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`);
+        await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_ai_budget_daily_unique ON ai_budget_daily_counters(usage_date, operation, scope, user_key)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_ai_budget_daily_user_date ON ai_budget_daily_counters(user_id, usage_date DESC)`);
+    } catch (err) {
+        console.warn('⚠️ Failed to ensure ai_budget_daily_counters columns/indexes:', (err as any)?.message || err);
+    }
+
+    // Payment gateway event ledger: keeps raw callback events for replay and auditing.
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS payment_events (
+            id SERIAL PRIMARY KEY,
+            event_id VARCHAR(128) NOT NULL,
+            channel VARCHAR(32) NOT NULL,
+            order_id INTEGER REFERENCES orders(id) ON DELETE SET NULL,
+            payment_order_id VARCHAR(128),
+            event_type VARCHAR(64) NOT NULL,
+            event_status VARCHAR(32),
+            payload JSONB,
+            received_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            processed_at TIMESTAMP
+        )
+    `);
+    try {
+        await pool.query(`ALTER TABLE payment_events ADD COLUMN IF NOT EXISTS event_id VARCHAR(128)`);
+        await pool.query(`ALTER TABLE payment_events ADD COLUMN IF NOT EXISTS channel VARCHAR(32)`);
+        await pool.query(`ALTER TABLE payment_events ADD COLUMN IF NOT EXISTS order_id INTEGER REFERENCES orders(id) ON DELETE SET NULL`);
+        await pool.query(`ALTER TABLE payment_events ADD COLUMN IF NOT EXISTS payment_order_id VARCHAR(128)`);
+        await pool.query(`ALTER TABLE payment_events ADD COLUMN IF NOT EXISTS event_type VARCHAR(64)`);
+        await pool.query(`ALTER TABLE payment_events ADD COLUMN IF NOT EXISTS event_status VARCHAR(32)`);
+        await pool.query(`ALTER TABLE payment_events ADD COLUMN IF NOT EXISTS payload JSONB`);
+        await pool.query(`ALTER TABLE payment_events ADD COLUMN IF NOT EXISTS received_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP`);
+        await pool.query(`ALTER TABLE payment_events ADD COLUMN IF NOT EXISTS processed_at TIMESTAMP`);
+        await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_payment_events_event_id_unique ON payment_events(event_id)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_payment_events_order_received_at_desc ON payment_events(order_id, received_at DESC)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_payment_events_payment_order_id ON payment_events(payment_order_id)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_payment_events_channel_received_at_desc ON payment_events(channel, received_at DESC)`);
+    } catch (err) {
+        console.warn('⚠️ Failed to ensure payment_events columns/indexes:', (err as any)?.message || err);
+    }
+
+    // Fulfillment tracking: one shipment per order with carrier/tracking and status milestones.
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS shipments (
+            id SERIAL PRIMARY KEY,
+            order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+            carrier VARCHAR(64) NOT NULL,
+            tracking_no VARCHAR(128) NOT NULL,
+            status VARCHAR(32) NOT NULL DEFAULT 'shipping',
+            shipped_at TIMESTAMP,
+            delivered_at TIMESTAMP,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (order_id)
+        )
+    `);
+    try {
+        await pool.query(`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE`);
+        await pool.query(`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS carrier VARCHAR(64)`);
+        await pool.query(`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS tracking_no VARCHAR(128)`);
+        await pool.query(`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS status VARCHAR(32) NOT NULL DEFAULT 'shipping'`);
+        await pool.query(`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS shipped_at TIMESTAMP`);
+        await pool.query(`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMP`);
+        await pool.query(`ALTER TABLE shipments ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP`);
+        await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_shipments_order_id_unique ON shipments(order_id)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_shipments_tracking_no ON shipments(tracking_no)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_shipments_status_updated_at_desc ON shipments(status, updated_at DESC)`);
+    } catch (err) {
+        console.warn('⚠️ Failed to ensure shipments columns/indexes:', (err as any)?.message || err);
+    }
+
+    // After-sales lifecycle: refund/return/exchange requests and admin review tracking.
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS after_sales_requests (
+            id SERIAL PRIMARY KEY,
+            order_id INTEGER NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+            user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            type VARCHAR(32) NOT NULL,
+            reason TEXT,
+            status VARCHAR(32) NOT NULL DEFAULT 'pending',
+            refund_status VARCHAR(32) NOT NULL DEFAULT 'none',
+            requested_amount NUMERIC(10,2),
+            refund_amount NUMERIC(10,2),
+            review_note TEXT,
+            admin_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+            reviewed_at TIMESTAMP,
+            completed_at TIMESTAMP,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+    try {
+        await pool.query(`ALTER TABLE after_sales_requests ADD COLUMN IF NOT EXISTS order_id INTEGER REFERENCES orders(id) ON DELETE CASCADE`);
+        await pool.query(`ALTER TABLE after_sales_requests ADD COLUMN IF NOT EXISTS user_id INTEGER REFERENCES users(id) ON DELETE CASCADE`);
+        await pool.query(`ALTER TABLE after_sales_requests ADD COLUMN IF NOT EXISTS type VARCHAR(32)`);
+        await pool.query(`ALTER TABLE after_sales_requests ADD COLUMN IF NOT EXISTS reason TEXT`);
+        await pool.query(`ALTER TABLE after_sales_requests ADD COLUMN IF NOT EXISTS status VARCHAR(32) NOT NULL DEFAULT 'pending'`);
+        await pool.query(`ALTER TABLE after_sales_requests ADD COLUMN IF NOT EXISTS refund_status VARCHAR(32) NOT NULL DEFAULT 'none'`);
+        await pool.query(`ALTER TABLE after_sales_requests ADD COLUMN IF NOT EXISTS requested_amount NUMERIC(10,2)`);
+        await pool.query(`ALTER TABLE after_sales_requests ADD COLUMN IF NOT EXISTS refund_amount NUMERIC(10,2)`);
+        await pool.query(`ALTER TABLE after_sales_requests ADD COLUMN IF NOT EXISTS review_note TEXT`);
+        await pool.query(`ALTER TABLE after_sales_requests ADD COLUMN IF NOT EXISTS admin_id INTEGER REFERENCES users(id) ON DELETE SET NULL`);
+        await pool.query(`ALTER TABLE after_sales_requests ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMP`);
+        await pool.query(`ALTER TABLE after_sales_requests ADD COLUMN IF NOT EXISTS completed_at TIMESTAMP`);
+        await pool.query(`ALTER TABLE after_sales_requests ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_after_sales_user_created_at_desc ON after_sales_requests(user_id, created_at DESC)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_after_sales_order_created_at_desc ON after_sales_requests(order_id, created_at DESC)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_after_sales_status_created_at_desc ON after_sales_requests(status, created_at DESC)`);
+    } catch (err) {
+        console.warn('⚠️ Failed to ensure after_sales_requests columns/indexes:', (err as any)?.message || err);
     }
 
     // Create mall-facing all_designs table to store published canvases
@@ -262,6 +452,76 @@ const ensureOrderAndDesignTables = async (pool: Pool) => {
         await pool.query(`CREATE INDEX IF NOT EXISTS idx_all_designs_source_order_id ON all_designs(source_order_id)`);
     } catch (err) {
         console.warn('⚠️ Failed to ensure all_designs indexes:', (err as any)?.message || err);
+    }
+
+    // Product/SKU master data for make-to-order selling.
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS products (
+            id SERIAL PRIMARY KEY,
+            name VARCHAR(128) NOT NULL,
+            description TEXT,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS product_skus (
+            id SERIAL PRIMARY KEY,
+            product_id INTEGER NOT NULL REFERENCES products(id) ON DELETE CASCADE,
+            sku_code VARCHAR(64) NOT NULL,
+            size VARCHAR(32),
+            color VARCHAR(32),
+            price NUMERIC(10,2) NOT NULL,
+            sla_days INTEGER NOT NULL DEFAULT 1,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            metadata JSONB,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (sku_code)
+        )
+    `);
+    try {
+        await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS description TEXT`);
+        await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE`);
+        await pool.query(`ALTER TABLE products ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP`);
+
+        await pool.query(`ALTER TABLE product_skus ADD COLUMN IF NOT EXISTS product_id INTEGER REFERENCES products(id) ON DELETE CASCADE`);
+        await pool.query(`ALTER TABLE product_skus ADD COLUMN IF NOT EXISTS sku_code VARCHAR(64)`);
+        await pool.query(`ALTER TABLE product_skus ADD COLUMN IF NOT EXISTS size VARCHAR(32)`);
+        await pool.query(`ALTER TABLE product_skus ADD COLUMN IF NOT EXISTS color VARCHAR(32)`);
+        await pool.query(`ALTER TABLE product_skus ADD COLUMN IF NOT EXISTS price NUMERIC(10,2)`);
+        await pool.query(`ALTER TABLE product_skus ADD COLUMN IF NOT EXISTS sla_days INTEGER NOT NULL DEFAULT 1`);
+        await pool.query(`ALTER TABLE product_skus ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE`);
+        await pool.query(`ALTER TABLE product_skus ADD COLUMN IF NOT EXISTS metadata JSONB`);
+        await pool.query(`ALTER TABLE product_skus ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP`);
+
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_product_skus_product_id_active ON product_skus(product_id, is_active)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_product_skus_size_color ON product_skus(size, color)`);
+    } catch (err) {
+        console.warn('⚠️ Failed to ensure products/product_skus columns/indexes:', (err as any)?.message || err);
+    }
+
+    // Daily make-to-order capacity ledger (reserve slot on payment success).
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS production_capacity_daily (
+            id SERIAL PRIMARY KEY,
+            capacity_date DATE NOT NULL,
+            capacity_total INTEGER NOT NULL DEFAULT 200,
+            reserved_count INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (capacity_date)
+        )
+    `);
+    try {
+        await pool.query(`ALTER TABLE production_capacity_daily ADD COLUMN IF NOT EXISTS capacity_date DATE`);
+        await pool.query(`ALTER TABLE production_capacity_daily ADD COLUMN IF NOT EXISTS capacity_total INTEGER NOT NULL DEFAULT 200`);
+        await pool.query(`ALTER TABLE production_capacity_daily ADD COLUMN IF NOT EXISTS reserved_count INTEGER NOT NULL DEFAULT 0`);
+        await pool.query(`ALTER TABLE production_capacity_daily ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP`);
+        await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_production_capacity_daily_date_unique ON production_capacity_daily(capacity_date)`);
+    } catch (err) {
+        console.warn('⚠️ Failed to ensure production_capacity_daily columns/indexes:', (err as any)?.message || err);
     }
 
     // Reward designers when others place orders using their published designs.

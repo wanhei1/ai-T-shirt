@@ -125,6 +125,42 @@ groups:
           description: One or more dependencies are responding slowly and risk cascading latency.
           runbook: docs/OBSERVABILITY_ONCALL_RUNBOOK.md#dependencycheckslow
 
+      - alert: CoreTransactionRtoRisk
+        expr: dependency_up{dependency=~"postgres|redis"} == 0
+        for: 10m
+        labels:
+          severity: warning
+          service: backend
+          slo: dr-rto-core
+        annotations:
+          summary: Core dependency outage approaching core-path RTO
+          description: Postgres/Redis outage persisted for 10m and is approaching same-city core RTO budget.
+          runbook: docs/DR_RUNBOOK.md
+
+      - alert: CoreTransactionRtoBreach
+        expr: dependency_up{dependency=~"postgres|redis"} == 0
+        for: 15m
+        labels:
+          severity: critical
+          service: backend
+          slo: dr-rto-core
+        annotations:
+          summary: Core dependency outage breached core same-city RTO
+          description: Postgres/Redis outage exceeded 15m threshold; trigger failover/rollback immediately.
+          runbook: docs/DR_RUNBOOK.md
+
+      - alert: AiAsyncRtoBreach
+        expr: dependency_up{dependency="rabbitmq"} == 0
+        for: 60m
+        labels:
+          severity: critical
+          service: worker
+          slo: dr-rto-ai
+        annotations:
+          summary: RabbitMQ outage breached AI async same-city RTO
+          description: Async pipeline dependency outage exceeded 60m threshold.
+          runbook: docs/DR_RUNBOOK.md
+
   - name: tshirt-ai
     rules:
       - alert: ComfyUiFailureRateHigh
@@ -142,3 +178,29 @@ groups:
           summary: ComfyUI failure ratio above 20% for 10m
           description: Image generation provider has elevated failures.
           runbook: docs/OBSERVABILITY_ONCALL_RUNBOOK.md#comfyuifailureratehigh
+
+  - name: tshirt-billing
+    rules:
+      - alert: BillingReconciliationMismatch
+        expr: billing_reconciliation_total_mismatches > 0
+        for: 10m
+        labels:
+          severity: critical
+          service: backend
+          slo: financial-consistency
+        annotations:
+          summary: Billing reconciliation mismatch detected
+          description: Payment, order, and membership transaction reconciliation found mismatches for over 10m.
+          runbook: docs/OBSERVABILITY_ONCALL_RUNBOOK.md#billingreconciliationmismatch
+
+      - alert: BillingReconciliationStale
+        expr: time() - billing_reconciliation_last_run_timestamp_seconds > 5400
+        for: 10m
+        labels:
+          severity: warning
+          service: backend
+          slo: financial-consistency
+        annotations:
+          summary: Billing reconciliation metric is stale
+          description: Billing reconciliation has not reported fresh data for over 90 minutes.
+          runbook: docs/OBSERVABILITY_ONCALL_RUNBOOK.md#billingreconciliationstale

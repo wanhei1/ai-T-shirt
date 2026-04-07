@@ -339,6 +339,18 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
         return
       }
       const err = error as ApiClientError
+      if (err?.code === "AI_DISABLED") {
+        setError(
+          translate({
+            zh: "AI 定制功能暂时关闭，请先选择模板款或稍后再试。",
+            en: "AI customization is temporarily disabled. Please choose a template design or try again later.",
+          })
+        )
+        setGenerationProgress("")
+        setGenerationPercent(0)
+        setQueueHint(null)
+        return
+      }
       if (err?.status === 401) {
         setErrorAction("login")
       }

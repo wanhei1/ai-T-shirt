@@ -4,6 +4,9 @@
   "description": "",
   "main": "src/app.ts",
   "scripts": {
+    "prebuild": "npm --prefix ../shared run build",
+    "predev": "npm --prefix ../shared run build",
+    "prestart": "npm --prefix ../shared run build",
     "start": "node dist/app.js",
     "start:safe": "node dist/app.js",
     "start:worker": "REQUIRE_SHARED_JOB_STATE=true node dist/worker.js",
@@ -20,6 +23,7 @@
     "db:index-audit:prod": "node dist/db/index-audit.js",
     "db:archive-orders": "ts-node src/db/archive-orders.ts",
     "db:archive-orders:prod": "node dist/db/archive-orders.js",
+    "backup:daily": "bash ../scripts/backup/run-daily-backup.sh",
     "security:validate-env": "ts-node src/config/env-guard.ts",
     "security:validate-env:prod": "node dist/config/env-guard.js",
     "security:validate-env:strict": "NODE_ENV=production ts-node src/config/env-guard.ts",
@@ -30,6 +34,12 @@
     "release:preflight:prod": "npm run security:validate-env:strict:prod && npm run release:db:check:prod",
     "release:guard": "ts-node src/release/slo-rollout-guard.ts",
     "release:guard:prod": "node dist/release/slo-rollout-guard.js",
+    "dr:readiness": "ts-node src/release/dr-readiness-check.ts",
+    "dr:readiness:prod": "node dist/release/dr-readiness-check.js",
+    "billing:reconcile": "ts-node src/release/billing-reconciliation.ts",
+    "billing:reconcile:prod": "node dist/release/billing-reconciliation.js",
+    "cost:report": "ts-node src/release/cost-model-report.ts",
+    "cost:report:prod": "node dist/release/cost-model-report.js",
     "perf:api-sync-rw": "bash ../scripts/perf/run-api-sync-rw.sh",
     "perf:ai-async": "bash ../scripts/perf/run-ai-async.sh",
     "perf:dependency-chaos": "bash ../scripts/perf/run-dependency-chaos.sh",
@@ -39,6 +49,7 @@
     "watch": "ts-node --watch src/app.ts"
   },
   "dependencies": {
+    "@v0-t-shirt-design-editor/shared": "*",
     "amqplib": "^0.10.5",
     "axios": "^1.13.2",
     "bcryptjs": "^3.0.3",

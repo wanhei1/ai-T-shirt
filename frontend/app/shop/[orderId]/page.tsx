@@ -15,6 +15,7 @@ type GalleryDesign = {
   order_id: number | string;
   created_at: string;
   username: string;
+  category?: string | null;
   selections?: Record<string, any>;
   design?: {
     selections?: Record<string, any>;

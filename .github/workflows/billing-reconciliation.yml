@@ -1,0 +1,41 @@
+name: Billing Reconciliation
+
+"on":
+  workflow_dispatch:
+  schedule:
+    - cron: '20 2 * * *'
+
+jobs:
+  daily-billing-reconciliation:
+    name: Daily Billing Reconciliation
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: production
+      DATABASE_URLS: ${{ secrets.DATABASE_URLS }}
+      BILLING_RECONCILIATION_LOOKBACK_HOURS: 24
+      BILLING_RECONCILIATION_OUTPUT_PATH: artifacts/reconciliation/github-action-report.json
+      BILLING_RECONCILIATION_FAIL_ON_MISMATCH: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run billing reconciliation
+        run: npm run billing:reconcile
+
+      - name: Upload reconciliation artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: billing-reconciliation
+          path: artifacts/reconciliation/**
+          if-no-files-found: warn

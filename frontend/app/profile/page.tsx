@@ -19,6 +19,8 @@ import { AuthGuard } from "@/components/auth/auth-guard";
 import { Separator } from "@/components/ui/separator";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import {
+  ChevronDown,
+  ChevronUp,
   Calendar,
   Copy,
   Crown,
@@ -49,6 +51,10 @@ type OrderRecord = {
   created_at: string;
   total: number | string;
   status: string;
+  payment_status?: string;
+  payment_channel?: string | null;
+  payment_order_id?: string | null;
+  paid_at?: string | null;
   design?: {
     elements?: Array<{
       type?: string;
@@ -57,6 +63,26 @@ type OrderRecord = {
     selections?: Record<string, string>;
   };
   selections?: Record<string, string>;
+};
+
+type TrackingRecord = {
+  orderId: number;
+  orderStatus: string;
+  shipment: {
+    id: number;
+    orderId: number;
+    carrier: string;
+    trackingNo: string;
+    status: string;
+    shippedAt: string | null;
+    deliveredAt: string | null;
+    updatedAt: string | null;
+  } | null;
+  timeline: Array<{
+    key: string;
+    label: string;
+    time: string | null;
+  }>;
 };
 
 type ReferralMe = {
@@ -81,6 +107,9 @@ export default function ProfilePage() {
     text: string;
   } | null>(null);
   const [orders, setOrders] = useState<OrderRecord[] | null>(null);
+  const [orderTrackingMap, setOrderTrackingMap] = useState<Record<number, TrackingRecord>>({});
+  const [expandedTrackingOrderId, setExpandedTrackingOrderId] = useState<number | null>(null);
+  const [trackingLoadingOrderId, setTrackingLoadingOrderId] = useState<number | null>(null);
   const [membership, setMembership] = useState<MembershipRecord | null>(null);
   const [isLoadingMembership, setIsLoadingMembership] = useState(true);
 
@@ -428,6 +457,47 @@ export default function ProfilePage() {
         day: "numeric",
       }
     );
+
+  const formatTimelineTime = (value: string | null | undefined) => {
+    if (!value) return translate({ zh: "时间待更新", en: "Pending update" });
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return value;
+    return date.toLocaleString(translate({ zh: "zh-CN", en: "en-US" }));
+  };
+
+  const handleToggleTracking = async (orderIdRaw: string | number) => {
+    const orderId = Number(orderIdRaw);
+    if (!Number.isFinite(orderId) || orderId <= 0) return;
+
+    if (expandedTrackingOrderId === orderId) {
+      setExpandedTrackingOrderId(null);
+      return;
+    }
+
+    if (!orderTrackingMap[orderId]) {
+      try {
+        setTrackingLoadingOrderId(orderId);
+        const { apiClient } = await import("@/lib/api-client");
+        const tracking = await apiClient.getOrderTracking(orderId);
+        setOrderTrackingMap((prev) => ({ ...prev, [orderId]: tracking }));
+      } catch (error) {
+        console.warn("Failed to fetch order tracking", error);
+        setOrderTrackingMap((prev) => ({
+          ...prev,
+          [orderId]: {
+            orderId,
+            orderStatus: "pending",
+            shipment: null,
+            timeline: [],
+          },
+        }));
+      } finally {
+        setTrackingLoadingOrderId(null);
+      }
+    }
+
+    setExpandedTrackingOrderId(orderId);
+  };
 
   return (
     <AuthGuard requireAuth>
@@ -926,11 +996,59 @@ export default function ProfilePage() {
                                   <div className="text-xs text-muted-foreground">
                                     {order.status}
                                   </div>
+                                  <div className="text-xs text-muted-foreground">
+                                    {order.payment_status === "pending"
+                                      ? translate({ zh: "待支付", en: "Pending Payment" })
+                                      : order.payment_status === "paid"
+                                      ? translate({ zh: "已支付", en: "Paid" })
+                                      : order.payment_status || translate({ zh: "支付状态未知", en: "Payment Status Unknown" })}
+                                  </div>
                                 </div>
                               </div>
                               <div className="mt-2 text-sm text-muted-foreground">
                                 {translate({ zh: "版型：", en: "Style:" })} {order.selections?.style ?? "—"} • {translate({ zh: "颜色：", en: "Color:" })} {order.selections?.color ?? "—"} • {translate({ zh: "尺码：", en: "Size:" })} {order.selections?.size ?? "—"}
                               </div>
+                              <div className="mt-3">
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => handleToggleTracking(order.id)}
+                                  disabled={trackingLoadingOrderId === Number(order.id)}
+                                >
+                                  {trackingLoadingOrderId === Number(order.id)
+                                    ? translate({ zh: "加载物流中...", en: "Loading tracking..." })
+                                    : expandedTrackingOrderId === Number(order.id)
+                                    ? translate({ zh: "收起物流", en: "Hide Tracking" })
+                                    : translate({ zh: "查看物流", en: "View Tracking" })}
+                                  {expandedTrackingOrderId === Number(order.id)
+                                    ? <ChevronUp className="ml-2 h-4 w-4" />
+                                    : <ChevronDown className="ml-2 h-4 w-4" />}
+                                </Button>
+                              </div>
+                              {expandedTrackingOrderId === Number(order.id) && (
+                                <div className="mt-3 rounded-md border bg-muted/30 p-3">
+                                  {orderTrackingMap[Number(order.id)]?.shipment ? (
+                                    <div className="mb-3 text-xs text-muted-foreground">
+                                      {translate({ zh: "物流公司", en: "Carrier" })}: {orderTrackingMap[Number(order.id)]?.shipment?.carrier ?? "—"}
+                                      {" · "}
+                                      {translate({ zh: "运单号", en: "Tracking No." })}: {orderTrackingMap[Number(order.id)]?.shipment?.trackingNo ?? "—"}
+                                    </div>
+                                  ) : (
+                                    <div className="mb-3 text-xs text-muted-foreground">
+                                      {translate({ zh: "暂未发货", en: "Not shipped yet" })}
+                                    </div>
+                                  )}
+                                  <div className="space-y-2">
+                                    {(orderTrackingMap[Number(order.id)]?.timeline || []).map((event) => (
+                                      <div key={event.key} className="flex items-center justify-between rounded border bg-background px-2 py-1 text-xs">
+                                        <span>{event.label}</span>
+                                        <span className="text-muted-foreground">{formatTimelineTime(event.time)}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           </div>
                         );

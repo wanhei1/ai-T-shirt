@@ -1,0 +1,36 @@
+name: Daily Backup
+
+"on":
+  workflow_dispatch:
+  schedule:
+    - cron: '10 1 * * *'
+
+jobs:
+  daily-backup:
+    name: Daily Backup Executor
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: production
+      DATABASE_URLS: ${{ secrets.DATABASE_URLS }}
+      BACKUP_OUTPUT_DIR: artifacts/backup
+      BACKUP_RETENTION_DAYS: 7
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install PostgreSQL client
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y postgresql-client
+
+      - name: Run daily backup
+        run: npm run backup:daily
+
+      - name: Upload backup artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: daily-backup
+          path: artifacts/backup/**
+          if-no-files-found: warn

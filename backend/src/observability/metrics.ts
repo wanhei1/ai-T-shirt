@@ -200,3 +200,8 @@ registerCounter("api_errors_total", "Total API errors by code and status");
 registerGauge("dependency_up", "Dependency availability status (1=up, 0=down)");
 registerHistogram("dependency_check_duration_seconds", "Dependency check duration in seconds", [0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 5]);
 registerHistogram("job_queue_wait_duration_seconds", "Queue waiting duration before a worker starts processing a job", [0.1, 0.5, 1, 2, 5, 10, 20, 30, 60, 120, 300]);
+registerCounter("billing_reconciliation_runs_total", "Total billing reconciliation runs by status");
+registerGauge("billing_reconciliation_mismatch_count", "Billing reconciliation mismatch count by mismatch kind");
+registerGauge("billing_reconciliation_total_mismatches", "Total billing reconciliation mismatches in current lookback window");
+registerGauge("billing_reconciliation_last_run_status", "Billing reconciliation last run status (1=success, 0=failed)");
+registerGauge("billing_reconciliation_last_run_timestamp_seconds", "Unix timestamp of the last billing reconciliation run");

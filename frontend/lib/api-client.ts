@@ -1,10 +1,235 @@
 import type { AuthResponse, LoginRequest, RegisterRequest, User } from '@/types/auth';
+import {
+  API_COMMON_ERROR_CODES,
+  REQUEST_VALIDATION_ERROR_CODES,
+  type ApiCommonErrorCode,
+  type ApiErrorCode,
+  type RequestValidationErrorCode,
+} from '@v0-t-shirt-design-editor/shared';
 
 export type ApiClientError = Error & {
   status?: number;
-  code?: string;
+  code?: ApiErrorCode | string;
   requestId?: string | null;
   details?: unknown;
+  validationErrors?: ApiValidationErrorItem[];
+};
+
+export type ApiValidationErrorItem = {
+  field: string;
+  code: RequestValidationErrorCode | string;
+  message?: string;
+};
+
+export type AdminOrderStatusTransition = {
+  before: string | null;
+  after: string | null;
+};
+
+export type UpdateAdminOrderStatusResponse = {
+  order: {
+    id: number;
+    user_id: number;
+    previous_status: string | null;
+    status: string;
+  };
+  statusTransition: AdminOrderStatusTransition;
+};
+
+export type CreatePaymentIntentResponse = {
+  orderId: number;
+  channel: 'alipay';
+  amount: number;
+  paymentOrderId: string;
+  clientPayload: {
+    provider: 'alipay';
+    outTradeNo: string;
+    totalAmount: number;
+    subject: string;
+    timeoutExpress: string;
+    notifyUrl: string | null;
+    returnUrl: string | null;
+  };
+};
+
+export type OrderTrackingResponse = {
+  orderId: number;
+  orderStatus: string;
+  shipment: {
+    id: number;
+    orderId: number;
+    carrier: string;
+    trackingNo: string;
+    status: string;
+    shippedAt: string | null;
+    deliveredAt: string | null;
+    updatedAt: string | null;
+  } | null;
+  timeline: Array<{
+    key: string;
+    label: string;
+    time: string | null;
+  }>;
+};
+
+export type AdminProductSku = {
+  id: number;
+  skuCode: string;
+  size?: string | null;
+  color?: string | null;
+  price: number;
+  slaDays: number;
+  isActive: boolean;
+  metadata?: unknown;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type AdminProduct = {
+  id: number;
+  name: string;
+  description?: string | null;
+  is_active: boolean;
+  created_at?: string;
+  updated_at?: string;
+  skus: AdminProductSku[];
+};
+
+export type AdminProductionCapacity = {
+  id: number;
+  capacity_date: string;
+  capacity_total: number;
+  reserved_count: number;
+  created_at?: string;
+  updated_at?: string;
+};
+
+type ApiValidationErrorDetails = {
+  errors?: ApiValidationErrorItem[];
+};
+
+type SupportedLanguage = 'zh' | 'en';
+
+type FriendlyMessage = {
+  zh: string;
+  en: string;
+};
+
+const API_VALIDATION_FIELD_LABELS: Record<string, FriendlyMessage> = {
+  body: { zh: '请求体', en: 'request body' },
+  total: { zh: '订单金额', en: 'order total' },
+  items: { zh: '商品列表', en: 'order items' },
+  address: { zh: '收货地址', en: 'shipping address' },
+  phone: { zh: '联系电话', en: 'phone number' },
+  publishToAll: { zh: '公开设置', en: 'publish setting' },
+  sourceAllId: { zh: '来源作品', en: 'source design' },
+  category: { zh: '分类', en: 'category' },
+  planId: { zh: '会员套餐', en: 'membership plan' },
+  paymentReference: { zh: '支付参考号', en: 'payment reference' },
+  provider: { zh: '支付渠道', en: 'payment provider' },
+};
+
+const VALIDATION_ERROR_CODE_MESSAGES: Record<RequestValidationErrorCode, FriendlyMessage> = {
+  [REQUEST_VALIDATION_ERROR_CODES.INVALID_BODY]: { zh: '请求格式错误，请刷新页面后重试', en: 'Invalid request format. Please refresh and try again.' },
+  [REQUEST_VALIDATION_ERROR_CODES.INVALID_TOTAL]: { zh: '订单金额无效', en: 'Order total is invalid.' },
+  [REQUEST_VALIDATION_ERROR_CODES.INVALID_ITEMS]: { zh: '订单商品不能为空', en: 'Order items cannot be empty.' },
+  [REQUEST_VALIDATION_ERROR_CODES.INVALID_ADDRESS]: { zh: '收货地址无效，请重新填写', en: 'Shipping address is invalid.' },
+  [REQUEST_VALIDATION_ERROR_CODES.INVALID_PHONE]: { zh: '联系电话格式不正确', en: 'Phone number format is invalid.' },
+  [REQUEST_VALIDATION_ERROR_CODES.INVALID_PUBLISH_TO_ALL]: { zh: '公开设置无效', en: 'Publish setting is invalid.' },
+  [REQUEST_VALIDATION_ERROR_CODES.INVALID_SOURCE_ALL_ID]: { zh: '来源作品ID无效', en: 'Source design ID is invalid.' },
+  [REQUEST_VALIDATION_ERROR_CODES.INVALID_CATEGORY]: { zh: '分类参数无效', en: 'Category value is invalid.' },
+  [REQUEST_VALIDATION_ERROR_CODES.INVALID_PLAN_ID]: { zh: '会员套餐无效，请重新选择', en: 'Membership plan is invalid. Please select again.' },
+  [REQUEST_VALIDATION_ERROR_CODES.INVALID_PAYMENT_REFERENCE]: { zh: '支付参考号格式无效', en: 'Payment reference format is invalid.' },
+  [REQUEST_VALIDATION_ERROR_CODES.INVALID_PROVIDER]: { zh: '支付渠道参数无效', en: 'Payment provider value is invalid.' },
+};
+
+const COMMON_ERROR_CODE_MESSAGES: Record<ApiCommonErrorCode, FriendlyMessage> = {
+  [API_COMMON_ERROR_CODES.INVALID_REQUEST]: { zh: '提交信息不完整或格式错误', en: 'Submitted data is incomplete or invalid.' },
+  [API_COMMON_ERROR_CODES.MEMBERSHIP_REQUIRED]: { zh: '需要有效会员才能继续', en: 'An active membership is required.' },
+  [API_COMMON_ERROR_CODES.INSUFFICIENT_BALANCE]: { zh: '会员余额不足', en: 'Insufficient membership balance.' },
+  [API_COMMON_ERROR_CODES.AI_BUDGET_USER_QUOTA_EXCEEDED]: { zh: '你今日 AI 生成额度已用完，请明天再试', en: 'Your daily AI quota is exhausted. Please try again tomorrow.' },
+  [API_COMMON_ERROR_CODES.AI_BUDGET_GLOBAL_QUOTA_EXCEEDED]: { zh: '今日 AI 总预算已达上限，系统已降级为模板模式', en: 'Daily AI budget reached. The system is degraded to template mode.' },
+  [API_COMMON_ERROR_CODES.AI_BUDGET_DELAYED]: { zh: 'AI 预算紧张，已进入延迟队列，请稍后重试', en: 'AI budget is constrained. Requests are delayed, please retry later.' },
+};
+
+export const API_ERROR_CODE_MESSAGES: Record<ApiErrorCode, FriendlyMessage> = {
+  ...VALIDATION_ERROR_CODE_MESSAGES,
+  ...COMMON_ERROR_CODE_MESSAGES,
+};
+
+const pickFriendlyMessage = (code: string | undefined, language: SupportedLanguage): string | null => {
+  if (!code) return null;
+  const entry = API_ERROR_CODE_MESSAGES[code as ApiErrorCode];
+  if (!entry) return null;
+  return entry[language];
+};
+
+const pickFriendlyFieldLabel = (field: string | undefined, language: SupportedLanguage): string | null => {
+  if (!field) return null;
+  const entry = API_VALIDATION_FIELD_LABELS[field];
+  if (!entry) return null;
+  return entry[language];
+};
+
+export const getApiValidationErrors = (error: unknown): ApiValidationErrorItem[] => {
+  const details = (error as ApiClientError | null | undefined)?.details as ApiValidationErrorDetails | undefined;
+  const items = details?.errors;
+  if (!Array.isArray(items)) return [];
+  return items.filter((item) => !!item && typeof item.field === 'string' && typeof item.code === 'string');
+};
+
+export const getPrimaryApiErrorCode = (error: unknown): string | undefined => {
+  const err = error as ApiClientError | null | undefined;
+  const validationCode = getApiValidationErrors(error)[0]?.code;
+  return validationCode || err?.code;
+};
+
+export const getFriendlyApiValidationMessages = (
+  error: unknown,
+  language: SupportedLanguage
+): string[] => {
+  const validationErrors = getApiValidationErrors(error);
+  if (validationErrors.length === 0) return [];
+
+  const messages = validationErrors.map((issue) => {
+    const fieldLabel = pickFriendlyFieldLabel(issue.field, language);
+    const codeMessage = pickFriendlyMessage(issue.code, language);
+    const fallback = issue.message || (language === 'zh' ? '参数无效' : 'Invalid value');
+    const core = codeMessage || fallback;
+
+    if (!fieldLabel) return core;
+    if (language === 'zh') return `${fieldLabel}：${core}`;
+    return `${fieldLabel}: ${core}`;
+  });
+
+  return Array.from(new Set(messages));
+};
+
+export const getFriendlyApiErrorSummary = (
+  error: unknown,
+  fallback: FriendlyMessage,
+  language: SupportedLanguage
+) => {
+  const validationMessages = getFriendlyApiValidationMessages(error, language);
+  if (validationMessages.length > 0) {
+    const separator = language === 'zh' ? '；' : '; ';
+    return validationMessages.join(separator);
+  }
+  return getFriendlyApiErrorMessage(error, fallback, language);
+};
+
+export const getFriendlyApiErrorMessage = (
+  error: unknown,
+  fallback: FriendlyMessage,
+  language: SupportedLanguage
+) => {
+  const err = error as ApiClientError | null | undefined;
+  const primaryCode = getPrimaryApiErrorCode(error);
+  const friendly = pickFriendlyMessage(primaryCode, language);
+  const base = friendly || err?.message || fallback[language];
+  const codeTag = primaryCode ? ` [${primaryCode}]` : '';
+  const requestTag = err?.requestId ? ` (requestId: ${err.requestId})` : '';
+  return `${base}${codeTag}${requestTag}`;
 };
 
 const isAbortLikeError = (error: unknown) => {
@@ -69,9 +294,46 @@ class ApiClient {
   // This promise will resolve to the available base URL.
   // It's initialized once and reused for all method calls.
   private baseUrlPromise: Promise<string>;
+  private idempotencyKeyCache = new Map<string, string>();
 
   constructor() {
     this.baseUrlPromise = findAvailableApiUrl();
+  }
+
+  private stableStringify(input: unknown): string {
+    if (input === null || typeof input !== 'object') {
+      return JSON.stringify(input);
+    }
+
+    if (Array.isArray(input)) {
+      return `[${input.map((item) => this.stableStringify(item)).join(',')}]`;
+    }
+
+    const obj = input as Record<string, unknown>;
+    const keys = Object.keys(obj).sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${this.stableStringify(obj[key])}`).join(',')}}`;
+  }
+
+  private hashString(input: string): string {
+    let hash = 5381;
+    for (let i = 0; i < input.length; i += 1) {
+      hash = ((hash << 5) + hash) + input.charCodeAt(i);
+      hash |= 0;
+    }
+    return Math.abs(hash).toString(16);
+  }
+
+  private resolveStableIdempotencyKey(endpoint: string, payload: unknown): string {
+    const normalizedPayload = this.stableStringify(payload);
+    const cacheSlot = `${endpoint}:${this.hashString(normalizedPayload)}`;
+    const existing = this.idempotencyKeyCache.get(cacheSlot);
+    if (existing) {
+      return existing;
+    }
+
+    const newKey = `idem-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}-${this.hashString(cacheSlot)}`;
+    this.idempotencyKeyCache.set(cacheSlot, newKey);
+    return newKey;
   }
 
   // Helper to get the resolved base URL.
@@ -128,6 +390,7 @@ class ApiClient {
         err.code = errorData?.code
         err.details = errorData?.details
         err.requestId = errorData?.requestId || responseRequestId
+        err.validationErrors = getApiValidationErrors(err)
 
         const normalizedMessage = String(errorMessage).toLowerCase()
         const isExpiredOrInvalidToken =
@@ -224,8 +487,12 @@ class ApiClient {
 
   // Orders
   async createOrder(orderPayload: { total: number; items: any[]; selections?: any; design?: any; shipping_info?: any; address?: string | null; canvas?: any; publishToAll?: boolean; sourceAllId?: number | null; category?: string | null }) {
+    const idempotencyKey = this.resolveStableIdempotencyKey('/api/orders', orderPayload);
     return this.request('/api/orders', {
       method: 'POST',
+      headers: {
+        'Idempotency-Key': idempotencyKey,
+      },
       body: JSON.stringify(orderPayload),
     });
   }
@@ -239,6 +506,19 @@ class ApiClient {
   async getOrderSummaries(limit = 30) {
     const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.trunc(limit))) : 30;
     return this.request<{ orders: any[] }>(`/api/orders/summary?limit=${safeLimit}`, {
+      method: 'GET',
+    });
+  }
+
+  async createPaymentIntent(payload: { orderId: number; channel: 'alipay'; amount: number }) {
+    return this.request<CreatePaymentIntentResponse>('/api/payments/create-intent', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getOrderTracking(orderId: number) {
+    return this.request<OrderTrackingResponse>(`/api/orders/${orderId}/tracking`, {
       method: 'GET',
     });
   }
@@ -287,8 +567,12 @@ class ApiClient {
   }
 
   async checkoutCart(payload: { address: string; phone?: string }) {
+    const idempotencyKey = this.resolveStableIdempotencyKey('/api/cart/checkout', payload);
     return this.request<{ orders: any[]; membership?: any }>(`/api/cart/checkout`, {
       method: 'POST',
+      headers: {
+        'Idempotency-Key': idempotencyKey,
+      },
       body: JSON.stringify(payload),
     });
   }
@@ -308,9 +592,88 @@ class ApiClient {
   }
 
   async updateAdminOrderStatus(orderId: number, status: string) {
-    return this.request<{ order: { id: number; status: string } }>(`/api/admin/orders/${orderId}/status`, {
+    return this.request<UpdateAdminOrderStatusResponse>(`/api/admin/orders/${orderId}/status`, {
       method: 'PUT',
       body: JSON.stringify({ status }),
+    });
+  }
+
+  async getAdminReconciliationLatest(lookbackHours?: number) {
+    const query = Number.isFinite(lookbackHours as number)
+      ? `?lookbackHours=${Math.max(1, Math.min(168, Math.trunc(Number(lookbackHours))))}`
+      : '';
+    return this.request<{ report: any }>(`/api/admin/reconciliation/latest${query}`, {
+      method: 'GET',
+    });
+  }
+
+  async getAdminAiBudgetToday() {
+    return this.request<{
+      usageDate: string;
+      generatedAt: string;
+      guardMode: 'degrade' | 'delay' | 'pause';
+      global: Array<{
+        operation: 'ai-image' | 'virtual-tryon';
+        quota: number;
+        used: number;
+        remaining: number;
+        usageRate: number;
+        estimatedExhaustAt: string | null;
+      }>;
+      users: Array<{
+        userId: number;
+        operation: 'ai-image' | 'virtual-tryon';
+        quota: number;
+        used: number;
+        usageRate: number;
+        username?: string | null;
+        email?: string | null;
+      }>;
+    }>('/api/admin/ai-budget/today', {
+      method: 'GET',
+    });
+  }
+
+  async getAdminProducts() {
+    return this.request<{ products: AdminProduct[] }>('/api/admin/products', {
+      method: 'GET',
+    });
+  }
+
+  async createAdminProduct(payload: { name: string; description?: string; isActive?: boolean }) {
+    return this.request<{ product: any }>('/api/admin/products', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async createAdminProductSku(payload: {
+    productId: number;
+    skuCode: string;
+    size?: string;
+    color?: string;
+    price: number;
+    slaDays?: number;
+    isActive?: boolean;
+    metadata?: unknown;
+  }) {
+    return this.request<{ sku: any }>('/api/admin/product-skus', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateAdminProductSku(skuId: number, payload: { price?: number; slaDays?: number; isActive?: boolean }) {
+    return this.request<{ sku: any }>(`/api/admin/product-skus/${skuId}`, {
+      method: 'PUT',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async updateAdminProductionCapacity(date: string, capacityTotal: number) {
+    return this.request<{ capacity: AdminProductionCapacity }>(`/api/admin/production-capacity/${date}`, {
+      method: 'PUT',
+      body: JSON.stringify({ capacityTotal }),
     });
   }
 

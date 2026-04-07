@@ -13,6 +13,7 @@ import { randomUUID } from 'crypto';
 import { getMetricsAsPrometheus, incrementCounter, observeHistogram, setGauge } from './observability/metrics';
 import { logInfo, logWarn } from './utils/structured-logger';
 import { assertRuntimeEnvOrThrow } from './config/env-guard';
+import { BILLING_RECONCILIATION_KINDS, runBillingReconciliation } from './release/billing-reconciliation';
 
 const app = express();
 const PORT = process.env.PORT || 8181; // 改为 8189，避免与前端冲突
@@ -29,6 +30,15 @@ const parseCandidates = (multiValue?: string, singleValue?: string) => {
 
 const redisDependencyUrls = parseCandidates(process.env.REDIS_URLS, process.env.REDIS_URL);
 const dependencyCheckIntervalMs = Math.max(5000, Number.parseInt(process.env.DEPENDENCY_CHECK_INTERVAL_MS || '15000', 10) || 15000);
+const billingReconciliationEnabled = (process.env.BILLING_RECONCILIATION_ENABLED || 'true').toLowerCase() !== 'false';
+const billingReconciliationIntervalMs = Math.max(
+    60_000,
+    Number.parseInt(process.env.BILLING_RECONCILIATION_INTERVAL_MS || '900000', 10) || 900000
+);
+const billingReconciliationLookbackHours = Math.max(
+    1,
+    Number.parseInt(process.env.BILLING_RECONCILIATION_LOOKBACK_HOURS || '24', 10) || 24
+);
 const dependencyStatus = new Map<string, number>();
 let redisProbeClient: ReturnType<typeof createClient> | null = null;
 
@@ -129,6 +139,43 @@ const startDependencyMetricsLoop = (pool: Pool | null) => {
 };
 
 assertRuntimeEnvOrThrow();
+
+const startBillingReconciliationLoop = (pool: Pool | null) => {
+    if (!pool || !billingReconciliationEnabled) {
+        return null;
+    }
+
+    const runCheck = async () => {
+        const nowSeconds = Math.floor(Date.now() / 1000);
+        try {
+            const report = await runBillingReconciliation(pool, {
+                lookbackHours: billingReconciliationLookbackHours,
+                sampleLimit: 5,
+            });
+
+            for (const kind of BILLING_RECONCILIATION_KINDS) {
+                const item = report.mismatches.find((entry) => entry.kind === kind);
+                setGauge('billing_reconciliation_mismatch_count', item?.count || 0, { kind });
+            }
+            setGauge('billing_reconciliation_total_mismatches', report.totalMismatches);
+            setGauge('billing_reconciliation_last_run_status', 1);
+            setGauge('billing_reconciliation_last_run_timestamp_seconds', nowSeconds);
+            incrementCounter('billing_reconciliation_runs_total', { status: 'success' });
+        } catch (error) {
+            setGauge('billing_reconciliation_last_run_status', 0);
+            setGauge('billing_reconciliation_last_run_timestamp_seconds', nowSeconds);
+            incrementCounter('billing_reconciliation_runs_total', { status: 'failed' });
+            logWarn('billing_reconciliation_failed', {
+                error: error instanceof Error ? error.message : String(error),
+            });
+        }
+    };
+
+    void runCheck();
+    return setInterval(() => {
+        void runCheck();
+    }, billingReconciliationIntervalMs);
+};
 
 // 中间件
 // --- More robust CORS configuration ---
@@ -284,6 +331,7 @@ const initializeApp = async () => {
     let readPool: Pool | null = null;
     let dbConnected = false;
     let dependencyMetricsTimer: NodeJS.Timeout | null = null;
+    let billingReconciliationTimer: NodeJS.Timeout | null = null;
 
     try {
         // 尝试连接数据库
@@ -324,6 +372,7 @@ const initializeApp = async () => {
         app.use('/api', createRoutes(pool, readPool));
 
         dependencyMetricsTimer = startDependencyMetricsLoop(pool);
+        billingReconciliationTimer = startBillingReconciliationLoop(pool);
 
         // 404 处理
         app.use('*', (req, res) => {
@@ -356,6 +405,10 @@ const initializeApp = async () => {
             if (dependencyMetricsTimer) {
                 clearInterval(dependencyMetricsTimer);
                 dependencyMetricsTimer = null;
+            }
+            if (billingReconciliationTimer) {
+                clearInterval(billingReconciliationTimer);
+                billingReconciliationTimer = null;
             }
             if (redisProbeClient?.isOpen) {
                 try {

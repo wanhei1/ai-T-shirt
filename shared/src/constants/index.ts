@@ -40,3 +40,5 @@ export const DESIGN_ELEMENT_TYPES = [
   'image', 
   'shape',
 ] as const;
+
+export * from './error-codes';

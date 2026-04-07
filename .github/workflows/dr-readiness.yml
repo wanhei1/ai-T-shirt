@@ -1,0 +1,49 @@
+name: DR Readiness
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 2 * * 1'
+
+jobs:
+  dr-readiness-gate:
+    name: DR Readiness Gate
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: production
+      JWT_SECRET: ${{ secrets.JWT_SECRET }}
+      DATABASE_URLS: ${{ secrets.DATABASE_URLS }}
+      RABBITMQ_URLS: ${{ secrets.RABBITMQ_URLS }}
+      REDIS_URLS: ${{ secrets.REDIS_URLS }}
+      REQUIRE_SHARED_JOB_STATE: true
+      ALLOW_INMEMORY_JOB_STATE: false
+
+      DR_ENFORCE_MULTI_AZ: true
+      DR_ALLOW_SINGLE_NODE: false
+      DR_RTO_CORE_SAME_AZ_MINUTES: 15
+      DR_RPO_CORE_SAME_AZ_MINUTES: 5
+      DR_RTO_AI_SAME_AZ_MINUTES: 60
+      DR_RPO_AI_SAME_AZ_MINUTES: 15
+      DR_BACKUP_INCREMENTAL_MINUTES: ${{ secrets.DR_BACKUP_INCREMENTAL_MINUTES }}
+      DR_BACKUP_DAILY_FULL: ${{ secrets.DR_BACKUP_DAILY_FULL }}
+      DR_OBJECT_STORAGE_CROSS_REGION: ${{ secrets.DR_OBJECT_STORAGE_CROSS_REGION }}
+      DR_SECRETS_MULTI_REGION: ${{ secrets.DR_SECRETS_MULTI_REGION }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate strict env policy
+        run: npm run security:validate-env:strict
+
+      - name: Validate DR readiness
+        run: npm run dr:readiness

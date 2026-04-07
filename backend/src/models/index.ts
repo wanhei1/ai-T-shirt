@@ -192,7 +192,7 @@ export class OrderModel {
         const query = `
             INSERT INTO orders (user_id, total, category, items, selections, design, shipping_info, address, phone, order_time, canvas_front, canvas_back, canvas_meta, source_all_id)
             VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6::jsonb, $7::jsonb, $8, $9, NOW(), $10, $11, $12::jsonb, $13)
-            RETURNING id, user_id, total, category, status, items, selections, design, shipping_info, address, phone, order_time, canvas_front, canvas_back, canvas_meta, source_all_id, created_at
+            RETURNING id, user_id, total, category, status, payment_status, payment_channel, payment_order_id, paid_at, refund_status, refunded_at, sku_id, sku_snapshot, production_slot_date, production_due_at, promised_ship_at, items, selections, design, shipping_info, address, phone, order_time, canvas_front, canvas_back, canvas_meta, source_all_id, created_at
         `;
 
         const values = [
@@ -222,7 +222,7 @@ export class OrderModel {
     }
 
     async getOrdersByUserId(userId: number) {
-        const query = `SELECT id, user_id, total, category, status, items, selections, design, shipping_info, address, phone, order_time, canvas_front, canvas_back, canvas_meta, source_all_id, created_at FROM orders WHERE user_id = $1 ORDER BY created_at DESC`;
+        const query = `SELECT id, user_id, total, category, status, payment_status, payment_channel, payment_order_id, paid_at, refund_status, refunded_at, sku_id, sku_snapshot, production_slot_date, production_due_at, promised_ship_at, items, selections, design, shipping_info, address, phone, order_time, canvas_front, canvas_back, canvas_meta, source_all_id, created_at FROM orders WHERE user_id = $1 ORDER BY created_at DESC`;
         const result = await this.pool.query(query, [userId]);
         return result.rows || [];
     }
@@ -230,7 +230,7 @@ export class OrderModel {
     async getOrderSummariesByUserId(userId: number, limit = 30) {
         const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.trunc(limit))) : 30;
         const query = `
-            SELECT id, created_at, status, canvas_front, canvas_back
+            SELECT id, created_at, status, payment_status, payment_channel, payment_order_id, paid_at, refund_status, refunded_at, sku_snapshot, production_slot_date, production_due_at, promised_ship_at, canvas_front, canvas_back
             FROM orders
             WHERE user_id = $1
             ORDER BY created_at DESC
@@ -248,6 +248,17 @@ export class OrderModel {
                 o.total,
                 o.category,
                 o.status,
+                o.payment_status,
+                o.payment_channel,
+                o.payment_order_id,
+                o.paid_at,
+                o.refund_status,
+                o.refunded_at,
+                o.sku_id,
+                o.sku_snapshot,
+                o.production_slot_date,
+                o.production_due_at,
+                o.promised_ship_at,
                 o.items,
                 o.selections,
                 o.design,
@@ -271,7 +282,24 @@ export class OrderModel {
     }
 
     async updateOrderStatus(orderId: number, status: string) {
-        const query = `UPDATE orders SET status = $2 WHERE id = $1 RETURNING id, status`;
+        const query = `
+            WITH previous AS (
+                SELECT id, user_id, status AS previous_status
+                FROM orders
+                WHERE id = $1
+                FOR UPDATE
+            ),
+            updated AS (
+                UPDATE orders o
+                SET status = $2
+                FROM previous p
+                WHERE o.id = p.id
+                RETURNING o.id, o.user_id, o.status
+            )
+            SELECT u.id, u.user_id, p.previous_status, u.status
+            FROM updated u
+            INNER JOIN previous p ON p.id = u.id
+        `;
         const result = await this.pool.query(query, [orderId, status]);
         return result.rows[0] || null;
     }

@@ -1,0 +1,51 @@
+name: Cost Observability
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '0 3 * * 1'
+
+jobs:
+  weekly-cost-report:
+    name: Weekly Cost Model Report
+    runs-on: ubuntu-latest
+    env:
+      NODE_ENV: production
+      COST_METRICS_URL: ${{ secrets.COST_METRICS_URL }}
+      COST_METRICS_TOKEN: ${{ secrets.COST_METRICS_TOKEN }}
+      COST_SAMPLE_SECONDS: 300
+
+      COST_API_HOURLY_USD: ${{ vars.COST_API_HOURLY_USD }}
+      COST_WORKER_HOURLY_USD: ${{ vars.COST_WORKER_HOURLY_USD }}
+      COST_GPU_HOURLY_USD: ${{ vars.COST_GPU_HOURLY_USD }}
+      COST_API_REPLICA_COUNT: ${{ vars.COST_API_REPLICA_COUNT }}
+      COST_WORKER_REPLICA_COUNT: ${{ vars.COST_WORKER_REPLICA_COUNT }}
+      COST_GPU_REPLICA_COUNT: ${{ vars.COST_GPU_REPLICA_COUNT }}
+      COST_AI_VARIABLE_PER_OP_USD: ${{ vars.COST_AI_VARIABLE_PER_OP_USD }}
+      COST_TRYON_VARIABLE_PER_OP_USD: ${{ vars.COST_TRYON_VARIABLE_PER_OP_USD }}
+      COST_AI_MAX_PER_1K_USD: ${{ vars.COST_AI_MAX_PER_1K_USD }}
+      COST_TRYON_MAX_PER_1K_USD: ${{ vars.COST_TRYON_MAX_PER_1K_USD }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate cost report
+        run: npm run cost:report
+
+      - name: Upload cost artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: cost-report
+          path: artifacts/cost/**
+          if-no-files-found: warn

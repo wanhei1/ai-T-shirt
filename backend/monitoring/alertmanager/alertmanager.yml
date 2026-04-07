@@ -6,6 +6,18 @@ route:
   repeat_interval: 2h
   routes:
     - matchers:
+        - alertname="BillingReconciliationMismatch"
+      receiver: incident-ticket-bot
+      continue: true
+
+    - matchers:
+        - severity="warning"
+        - slo="financial-consistency"
+      receiver: default
+      mute_time_intervals:
+        - night-quiet-hours
+
+    - matchers:
         - severity="critical"
       receiver: critical-oncall
       continue: true
@@ -20,6 +32,19 @@ receivers:
     webhook_configs:
       - url: http://example-webhook.local/alerts/critical
         send_resolved: true
+
+  - name: incident-ticket-bot
+    webhook_configs:
+      - url: http://lb:8080/api/ops/alerts/ticket?token=alert-ticket-2026-04-07-vf7k9m2p4q1x8z
+        send_resolved: true
+
+time_intervals:
+  - name: night-quiet-hours
+    time_intervals:
+      - times:
+          - start_time: '00:00'
+            end_time: '08:00'
+        location: 'Asia/Shanghai'
 
 inhibit_rules:
   - source_matchers:

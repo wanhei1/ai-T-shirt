@@ -16,7 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Separator } from "@/components/ui/separator";
 import { Crown, CheckCircle2, Loader2, ShieldCheck } from "lucide-react";
-import apiClient from "@/lib/api-client";
+import apiClient, { getFriendlyApiErrorSummary } from "@/lib/api-client";
 
 interface MembershipRecord {
   id: number;
@@ -204,9 +204,8 @@ export default function MembershipPage() {
         setTransactions((tx as { transactions?: MembershipTransaction[] })?.transactions ?? []);
       } catch (error) {
         console.error("Failed to fetch membership", error);
-        setErrorMessage(
-          translate({ zh: "无法获取会员状态，请稍后重试", en: "Unable to load membership status. Please try again." })
-        );
+        const fallback = translate({ zh: "无法获取会员状态，请稍后重试", en: "Unable to load membership status. Please try again." });
+        setErrorMessage(getFriendlyApiErrorSummary(error, { zh: fallback, en: fallback }, "zh"));
       } finally {
         setIsLoadingStatus(false);
       }
@@ -252,9 +251,8 @@ export default function MembershipPage() {
       }
     } catch (error) {
       console.error("Membership activation failed", error);
-      setErrorMessage(
-        translate({ zh: "支付或开通失败，请稍后再试", en: "Payment or activation failed. Please retry." })
-      );
+      const fallback = translate({ zh: "支付或开通失败，请稍后再试", en: "Payment or activation failed. Please retry." });
+      setErrorMessage(getFriendlyApiErrorSummary(error, { zh: fallback, en: fallback }, "zh"));
     } finally {
       setIsProcessing(false);
     }

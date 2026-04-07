@@ -77,6 +77,33 @@ This runbook closes the "metrics exists but no alerting/SLO loop" gap by definin
 3. Check Redis availability/latency and cache prefix settings (`CACHE_REDIS_PREFIX`, endpoint failover status).
 4. If misses are abnormal, temporarily increase hot-route TTL (env) and open a follow-up issue for key design or invalidation frequency optimization.
 
+### BillingReconciliationMismatch
+
+1. Run `npm run billing:reconcile` and open the generated report under `artifacts/reconciliation/`.
+2. Prioritize the mismatch kind with highest count: membership payment missing tx, tx missing payment record, or order-payment amount mismatch.
+3. For `order_payment_amount_mismatch`, lock affected users from checkout temporarily and reconcile wallet balance manually before reopening traffic.
+4. Keep incident open until reconciliation total mismatches returns to 0 for 10 continuous minutes.
+
+### BillingReconciliationStale
+
+1. Check backend logs for `billing_reconciliation_failed` events and confirm DB connectivity.
+2. Validate environment values for `BILLING_RECONCILIATION_ENABLED`, interval, and lookback hours.
+3. Run `npm run billing:reconcile` manually; if successful, restore periodic loop and verify metric freshness.
+
+### CoreTransactionRtoRisk / CoreTransactionRtoBreach
+
+1. Start DR incident bridge immediately and assign incident commander.
+2. Trigger same-city failover runbook from `docs/DR_RUNBOOK.md`.
+3. Validate `/health/ready` recovery and confirm order path read/write availability.
+4. Record outage start/recovery timestamps for RTO evidence.
+
+### AiAsyncRtoBreach
+
+1. Switch AI path to degraded mode and protect core order path first.
+2. Recover RabbitMQ service or fail over to alternate endpoint cluster.
+3. Verify queue draining resumes and no unrecoverable job-state corruption appears.
+4. Attach queue recovery evidence to DR report.
+
 ## Postmortem Minimum Template
 
 - Incident id

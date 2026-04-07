@@ -9,7 +9,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 import { useLanguage } from "@/contexts/language-context";
-import apiClient, { type ApiClientError } from "@/lib/api-client";
+import apiClient, { getFriendlyApiErrorSummary, type ApiClientError } from "@/lib/api-client";
 
 type CartItem = {
   id: number;
@@ -41,11 +41,11 @@ export default function CartPage() {
   const [isCheckingOut, setIsCheckingOut] = useState(false);
 
   const formatApiError = (error: unknown, fallback: string) => {
-    const err = error as ApiClientError;
-    const message = err?.message || fallback;
-    const codeTag = err?.code ? ` [${err.code}]` : "";
-    const requestTag = err?.requestId ? ` (requestId: ${err.requestId})` : "";
-    return `${message}${codeTag}${requestTag}`;
+    return getFriendlyApiErrorSummary(
+      error,
+      { zh: fallback, en: fallback },
+      "zh"
+    );
   };
 
   const loadCart = async () => {
@@ -134,9 +134,13 @@ export default function CartPage() {
       }
 
       const base = translate({ zh: "结算失败，请稍后再试", en: "Checkout failed. Please try again." });
-      const codeTag = err?.code ? ` [${err.code}]` : "";
-      const requestTag = err?.requestId ? ` (requestId: ${err.requestId})` : "";
-      setError(`${base}${codeTag}${requestTag}`);
+      setError(
+        getFriendlyApiErrorSummary(
+          err,
+          { zh: base, en: base },
+          "zh"
+        )
+      );
     } finally {
       setIsCheckingOut(false);
     }

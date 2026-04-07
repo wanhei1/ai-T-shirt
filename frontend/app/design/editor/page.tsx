@@ -33,7 +33,7 @@ import { ImageUploader } from "@/components/design-tools/image-uploader"
 import { useLanguage, type LanguageText } from "@/contexts/language-context"
 import { buildCanvasMeta, CANVAS_SIZE, getShirtColorHex, getShirtPhotoSrc, PRINT_AREA } from "@/lib/design-canvas"
 import { externalizeDesignAssets } from "@/lib/design-storage"
-import apiClient from "@/lib/api-client"
+import apiClient, { type ApiClientError } from "@/lib/api-client"
 import { pollJobUntilDone } from "@/lib/job-polling"
 import type { DesignElement, TShirtSelections } from "@/types/design"
 
@@ -1113,7 +1113,13 @@ export default function DesignEditorPage() {
       }
       router.push("/design/preview")
     } catch (error) {
-      const message = error instanceof Error ? error.message : "试穿失败"
+      const err = error as ApiClientError
+      const message = err?.code === "AI_DISABLED"
+        ? translate({
+            zh: "AI 定制功能暂时关闭，试穿不可用。请先完成模板设计或稍后再试。",
+            en: "AI customization is temporarily disabled. Virtual try-on is unavailable for now.",
+          })
+        : (error instanceof Error ? error.message : "试穿失败")
       alert(message)
       setIsContinuingToPreview(false)
       setContinuePercent(0)
