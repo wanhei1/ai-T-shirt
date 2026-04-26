@@ -1,7 +1,20 @@
 import { NextResponse } from 'next/server'
 
 export async function GET() {
-  const comfyUIUrl = process.env.COMFYUI_URL || "http://82.157.19.21:8188,http://127.0.0.1:8188"
+  const isProduction = process.env.NODE_ENV === 'production'
+  const allowInProduction = process.env.ALLOW_PROD_TEST_COMFYUI === 'true'
+
+  if (isProduction && !allowInProduction) {
+    return NextResponse.json(
+      {
+        error: 'Endpoint disabled in production',
+        message: 'Set ALLOW_PROD_TEST_COMFYUI=true only for temporary diagnostics.',
+      },
+      { status: 403 }
+    )
+  }
+
+  const comfyUIUrl = process.env.COMFYUI_URL || "http://127.0.0.1:8188"
   
   // 解析配置的服务器地址（支持逗号分隔）
   const configuredServers = comfyUIUrl.split(',').map(url => url.trim())

@@ -98,7 +98,7 @@ export class SimpleComfyUIClient {
   private readonly defaultWidth: number
   private readonly defaultHeight: number
 
-  constructor(serverUrl: string = "http://82.157.19.21:8188") {
+  constructor(serverUrl: string = "http://127.0.0.1:8188") {
     this.serverUrl = serverUrl
 
     const urlsFromConfig = serverUrl.includes(",")
@@ -122,7 +122,7 @@ export class SimpleComfyUIClient {
       allUrls = urlsFromConfig.filter(
         (url) => !url.includes("127.0.0.1") && !url.includes("localhost") && !url.includes("0.0.0.0")
       )
-      console.log("生产环境：只使用公网地址")
+      console.log("生产环境：只使用配置的非本地地址")
     } else {
       allUrls = [...urlsFromConfig, ...defaultLocalUrls]
       if (isProduction && allowLocalInProd) {
@@ -131,6 +131,11 @@ export class SimpleComfyUIClient {
     }
 
     this.fallbackUrls = Array.from(new Set(allUrls))
+    if (this.fallbackUrls.length === 0) {
+      throw new Error(
+        "ComfyUI URL list is empty after production filtering. Configure NEXT_PUBLIC_COMFYUI_URL with a valid internal/proxy endpoint."
+      )
+    }
     console.log("ComfyUI 服务器列表 (按优先级):", this.fallbackUrls)
 
     this.defaultModelName = process.env.NEXT_PUBLIC_COMFYUI_MODEL_NAME || "Juggernaut-XL_v9_RunDiffusionPhoto_v2.safetensors"
