@@ -176,3 +176,45 @@ npm run dev:infra:ha
 ---
 
 如需了解更多部署、架构或故障排查资讯，请结合 `docs/` 目录阅读。期待你的反馈，一起完善这套 AI 定制服装平台。
+
+---
+
+## 🤖 How I Use an AI Agent to Maintain This Project
+
+This project is actively maintained with help from an AI agent (GitHub Copilot in VS Code). The goal is to speed up routine operations while keeping production changes safe, reviewable, and traceable.
+
+### What the AI Agent Helps With
+
+- **Release checklists**: Runs preflight and readiness commands, captures outputs, and flags blockers.
+- **Environment hygiene**: Verifies critical env vars (ports, secrets, URLs) and prevents unsafe defaults.
+- **Operational runbooks**: Produces step-by-step deployment and rollback instructions for repeatability.
+- **Production hardening**: Adds rate limits, tightens CORS, and checks service exposure.
+- **Incident triage**: Summarizes logs and validates health checks to narrow root causes.
+
+### Safety Rules I Follow
+
+1. **No blind changes**: All config edits are explicit and backed up before modification.
+2. **Phase-by-phase execution**: Each phase is validated before moving forward.
+3. **No destructive commands**: Avoids anything that might reset or remove data.
+4. **Human gate on secrets**: Tokens and passwords are always entered by a human.
+5. **Clear verification steps**: Every change is followed by a concrete validation command.
+
+### Typical Maintenance Workflow
+
+1. **Baseline checks**
+  - `pm2 status`
+  - `curl http://localhost:8189/health`
+  - `curl http://localhost:3000`
+2. **Build and validate**
+  - `npm run install:all`
+  - `npm run build`
+3. **Deploy safely**
+  - Restart services with PM2
+  - Verify endpoints and logs
+4. **Record outcomes**
+  - Capture outputs in a short status note for traceability
+
+### Why This Works
+
+The AI agent accelerates the mechanical parts of maintenance while I keep control of high-risk decisions (secrets, DNS changes, and production switches). This keeps the workflow fast, consistent, and auditable.
+

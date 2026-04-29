@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server"
 
-const apiUrlsString = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8185"
+const apiUrlsString = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8189"
 const potentialApiUrls = apiUrlsString
 	.split(",")
 	.map((url) => url.trim())
@@ -30,7 +30,7 @@ async function findAvailableApiBaseUrl(): Promise<string> {
 		}
 	}
 
-	determinedApiBaseUrl = potentialApiUrls[0] || "http://localhost:8185"
+	determinedApiBaseUrl = potentialApiUrls[0] || "http://localhost:8189"
 	return determinedApiBaseUrl
 }
 

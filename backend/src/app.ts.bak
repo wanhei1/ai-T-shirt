@@ -1,7 +1,6 @@
 import 'dotenv/config';
 import express, { NextFunction, Request, Response } from 'express';
 import cors from 'cors';
-import rateLimit from 'express-rate-limit';
 import path from 'path';
 import { mkdirSync } from 'fs';
 import connectToDatabase, { connectToReadDatabase } from './config/database';
@@ -179,24 +178,38 @@ const startBillingReconciliationLoop = (pool: Pool | null) => {
 };
 
 // 中间件
-const allowedOrigins = [
-    'http://localhost:3000',
-    'http://36.110.14.112:8478',
-];
+// --- More robust CORS configuration ---
+const allowedOrigins = (process.env.FRONTEND_URL || 'http://localhost:3000,http://localhost:3001,https://www.bit810.cn')
+    .split(',')
+    .map(url => url.trim());
 
+const isDev = process.env.NODE_ENV !== 'production';
+const isLocalDevOrigin = (origin: string) => {
+    return (
+        /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin) ||
+        /^http:\/\/\[::1\](:\d+)?$/.test(origin)
+    );
+};
 
 app.use(cors({
-    origin: allowedOrigins,
+    origin: (origin, callback) => {
+        // Allow requests with no origin (like mobile apps or curl requests)
+        if (!origin) return callback(null, true);
+
+        // In development, allow local dev origins regardless of port.
+        // This prevents CORS breakage when Next dev server port changes.
+        if (isDev && isLocalDevOrigin(origin)) {
+            return callback(null, true);
+        }
+
+        if (allowedOrigins.indexOf(origin) === -1) {
+            const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+            return callback(new Error(msg), false);
+        }
+        return callback(null, true);
+    },
     credentials: true
 }));
-
-const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 20,
-    message: { error: '请求过于频繁，请稍后再试' }
-});
-app.use('/api/login', authLimiter);
-app.use('/api/register', authLimiter);
 // Increase JSON and URL-encoded body size limits to allow larger payloads.
 // Orders can include embedded design images (data URLs), which easily exceed small defaults.
 // For production, prefer uploading large files to object storage and sending references.

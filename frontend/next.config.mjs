@@ -18,7 +18,7 @@ const nextConfig = {
     const publicApi = process.env.NEXT_PUBLIC_API_URL
       ? String(process.env.NEXT_PUBLIC_API_URL).split(",")[0]?.trim()
       : "";
-    const backendTarget = process.env.NEXT_INTERNAL_API_PROXY || publicApi || "http://127.0.0.1:8185";
+    const backendTarget = process.env.NEXT_INTERNAL_API_PROXY || publicApi || "http://127.0.0.1:8189";
     return [
       {
         source: "/backend/:path*",

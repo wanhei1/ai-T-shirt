@@ -243,9 +243,9 @@ const isAbortLikeError = (error: unknown) => {
 // --- Start of new, robust implementation ---
 
 // 1. Get the list of potential API URLs from environment variables.
-const apiUrlsString = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8185';
+const apiUrlsString = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8189';
 const envApiUrls = apiUrlsString.split(',').map(url => url.trim()).filter(Boolean);
-const defaultApiUrls = ['http://localhost:8185', 'http://localhost:8189', 'http://localhost:8181'];
+const defaultApiUrls = ['http://localhost:8189', 'http://localhost:8189', 'http://localhost:8181'];
 const browserProxyBaseUrl = typeof window !== 'undefined' ? `${window.location.origin}/backend` : null;
 
 const dedupeUrls = (urls: string[]) => Array.from(new Set(urls));
@@ -286,7 +286,7 @@ const findAvailableApiUrl = async (): Promise<string> => {
   // If no URL is available after checking all, fall back to the first one.
   // This allows for error messages on the UI instead of a total crash.
   console.error("🚨 No available API server found from the list. Falling back to the first configured URL.");
-  determinedApiBaseUrl = potentialApiUrls[0] || 'http://localhost:8185';
+  determinedApiBaseUrl = potentialApiUrls[0] || 'http://localhost:8189';
   return determinedApiBaseUrl;
 };
 

@@ -107,3 +107,5 @@ CatVTON/detectron2/_C*.so
 **/output/
 **/temp/
 **/user/
+artifacts/backup/
+artifacts/reconciliation/
