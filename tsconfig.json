@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "lib": ["ES2020"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
+    "outDir": "./dist",
+    "rootDir": "./",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "composite": false,
+    "incremental": true,
+    "paths": {
+      "@v0-t-shirt-design-editor/shared": ["./shared/src"],
+      "@v0-t-shirt-design-editor/shared/*": ["./shared/src/*"]
+    }
+  },
+  "include": ["shared/**/*", "frontend/**/*", "backend/**/*"],
+  "exclude": ["node_modules", "**/node_modules", "dist", "**/dist"]
+}
