@@ -14,12 +14,12 @@ fi
 
 if command -v gitleaks >/dev/null 2>&1; then
   echo "[secret-scan] using local gitleaks"
-  exec gitleaks detect --source . --redact --exit-code 1 --report-format sarif --report-path "$REPORT_PATH"
+  exec gitleaks detect --source . --config .gitleaks.toml --redact --exit-code 1 --report-format sarif --report-path "$REPORT_PATH"
 fi
 
 if command -v docker >/dev/null 2>&1; then
   echo "[secret-scan] local gitleaks not found, using docker image"
-  exec docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest detect --source /repo --redact --exit-code 1 --report-format sarif --report-path /repo/"$REPORT_PATH"
+  exec docker run --rm -v "$PWD:/repo" zricethezav/gitleaks:latest detect --source /repo --config /repo/.gitleaks.toml --redact --exit-code 1 --report-format sarif --report-path /repo/"$REPORT_PATH"
 fi
 
 echo "[secret-scan] gitleaks is not installed and docker is unavailable"

@@ -194,7 +194,7 @@ DATABASE_URL=postgres://username:password@ep-example.neon.tech/tshirtdesigner?ss
 JWT_SECRET=your-super-secret-jwt-key
 
 # ComfyUI Configuration
-COMFYUI_URL=http://82.157.19.21:8188
+COMFYUI_URL=http://127.0.0.1:8188
 
 # Next.js Configuration
 NEXTAUTH_URL=http://localhost:3000

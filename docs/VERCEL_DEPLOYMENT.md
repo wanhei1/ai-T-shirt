@@ -37,7 +37,7 @@
 4. **添加变量**：
    ```
    Key: COMFYUI_URL
-   Value: http://82.157.19.21:8188
+   Value: http://your-server:8188
    ```
 
 ## 🔍 调试步骤

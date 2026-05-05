@@ -17,5 +17,13 @@ module.exports = {
       autorestart: true,
       max_memory_restart: '300M',
     },
+    {
+      name: 'tshirt-worker',
+      script: 'dist/worker.js',
+      cwd: 'backend',
+      interpreter: 'node',
+      autorestart: true,
+      max_memory_restart: '300M',
+    },
   ],
 };

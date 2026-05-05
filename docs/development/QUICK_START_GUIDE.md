@@ -115,7 +115,7 @@ cp components.json your-project/
 这个组件包需要以下外部服务：
 
 ### ComfyUI (AI图像生成)
-- **默认地址**: `http://82.157.19.21:8188/`
+- **默认地址**: `http://127.0.0.1:8188/`
 - **配置方式**: 环境变量 `COMFYUI_URL`
 - **功能**: AI图像生成和处理
 
@@ -129,7 +129,7 @@ cp components.json your-project/
 
 ```env
 # ComfyUI配置
-COMFYUI_URL=http://82.157.19.21:8188/
+COMFYUI_URL=http://127.0.0.1:8188/
 
 # 其他配置
 NEXT_PUBLIC_APP_URL=http://localhost:3000

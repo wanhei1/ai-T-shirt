@@ -68,7 +68,7 @@ git push -u origin main
    如果需要连接后端 API，添加以下环境变量：
    ```
    NEXT_PUBLIC_API_URL=https://your-backend-url.com
-   NEXT_PUBLIC_COMFYUI_URL=http://82.157.19.21:8188
+   NEXT_PUBLIC_COMFYUI_URL=http://127.0.0.1:8188
    ```
 
 4. **部署**

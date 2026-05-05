@@ -1,0 +1,41 @@
+# Gitleaks configuration — allowlist known false positives
+# https://github.com/gitleaks/gitleaks/blob/master/config/example-gitleaks.toml
+
+title = "gitleaks config"
+
+[allowlist]
+  description = "Global allowlist for known false positives"
+  paths = [
+    '''\.env\.example$''',
+    '''\.env\.local\.example$''',
+    '''\.next-.*''',
+    '''node_modules/''',
+    '''\.git/''',
+    '''dist/''',
+    '''\.reports/''',
+    '''ecosystem\.config\.js$''',
+  ]
+
+[[rules]]
+  id = "hardcoded-ip-internal"
+  description = "Allowlist internal server IP used in dev config"
+  regex = '''82\.157\.19\.21'''
+  tags = ["ip", "internal"]
+
+[[rules]]
+  id = "hardcoded-domain-internal"
+  description = "Allowlist internal dev domain api.bit810.cn"
+  regex = '''api\.bit810\.cn'''
+  tags = ["domain", "internal"]
+
+[[rules]]
+  id = "jwt-test-secret"
+  description = "Allowlist CI/test JWT secret patterns"
+  regex = '''jwt-test-secret-[a-z0-9\-]+'''
+  tags = ["jwt", "test"]
+
+[[rules]]
+  id = "comfyui-placeholder"
+  description = "Allowlist ComfyUI localhost placeholder in examples"
+  regex = '''http://127\.0\.0\.1:8188'''
+  tags = ["url", "local"]
