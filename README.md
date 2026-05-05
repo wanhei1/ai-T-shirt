@@ -1,10 +1,15 @@
-# 自定义 T 恤设计编辑器
+# AI T-Shirt 设计平台
 
-现代化的 AI 驱动 T 恤定制平台，采用 **Next.js 14** + **Express.js** + **PostgreSQL** 架构。用户可以完成「选择款式 → 设计画布 → 预览下单」的全流程，支持 AI 图像生成、素材上传、订单保存与个人资料管理。
+现代化的 AI 驱动 T 恤定制平台，采用 **Next.js 14** + **Express.js** + **PostgreSQL** + **ComfyUI** 架构。用户可以完成「选择款式 → 设计画布 → 预览下单」的全流程，支持 AI 图像生成、虚拟试穿、素材上传、订单保存与个人资料管理。
 
-> 生产环境示例：https://vercel.com/wanhei1s-projects/v0-t-shirt-design-editor
+> 🌐 生产环境：https://vercel.com/wanhei1s-projects/v0-t-shirt-design-editor
+> 🖥️ 自托管服务器：http://api.bit810.cn（3090 GPU 服务器）
+
+---
 
 ## 🚀 快速开始
+
+### 本地开发
 
 ```bash
 # 1. 克隆仓库
@@ -20,116 +25,163 @@ cp frontend/.env.local.example frontend/.env.local  # 填入 API URL、ComfyUI �
 
 # 4. 构建并启动
 cd shared && npm run build && cd ..
-cd backend && npm run build && cd ..
-cd frontend && npm run build && cd ..
-
-# 5. 使用 PM2 启动（推荐）
-pm2 start ecosystem.config.js
-# 或分别启动：
-#   cd backend && node dist/app.js
-#   cd frontend && npm start
-
-# 6. 验证
-curl http://localhost:8189/health   # 后端健康检查
-curl http://localhost:3000          # 前端页面
+npm run dev   # 前后端并行启动
 ```
 
-> **提示**：完整环境变量说明见 `backend/.env.example` 和 `frontend/.env.example`。
+### 服务器部署（PM2）
+
+```bash
+# 1. 构建
+npm run build:backend
+cd frontend && npm run build && cd ..
+
+# 2. 使用 PM2 启动（推荐）
+pm2 start ecosystem.config.js
+pm2 save
+
+# 3. 验证
+pm2 status
+curl http://localhost:8189/health   # 后端
+curl http://localhost:3000          # 前端
+```
+
+默认端口：Frontend `:3000`，Backend `:8189`，ComfyUI `:8188`（服务器上由 junrong 进程运行）。
+
+---
 
 ## ✨ 功能亮点
-- 三步设计流程：选择款式与配色 → 画布设计 → 预览确认
-- 设计画布支持文字、上传图片、AI 生成图像（ComfyUI）
-- 多语言界面（中 / 英）与响应式 UI（Shadcn UI + Tailwind CSS）
-- JWT 鉴权：注册、登录、资料更新、订单记录
-- 后端自动建表并接入 PostgreSQL（Neon 推荐）
-- 健康检查、ComfyUI 状态检测、订单 JSON 序列化存档
+
+- **三步设计流程**：选择款式与配色 → 画布设计 → 预览确认
+- **AI 图像生成**：接入 ComfyUI，支持 txt2img / img2img 多种风格
+- **虚拟试穿**：CatVTON 模型，上传模特照 + 服装图即可试穿（开发中）
+- **背景任务队列**：RabbitMQ + Worker 异步处理耗时任务
+- **多语言界面**：中 / 英双语（Shadcn UI + Tailwind CSS）
+- **JWT 鉴权**：注册、登录、资料更新、订单记录
+- **CI/CD**：GitHub Actions 自动化测试、安全扫描、DB 迁移检查
+
+---
 
 ## 🧱 架构概览
 
 ```
 custom-tshirt-designer/
-├─ frontend/      # Next.js 14 (App Router) 前端
-│  ├─ app/        # 路由、三步向导、API Routes
-│  ├─ components/ # UI、设计工具、状态卡片
-│  ├─ contexts/   # 语言、认证上下文
-│  └─ lib/        # API 客户端、ComfyUI 客户端、工作流工具
-├─ backend/       # Express.js + pg 的 REST API
-│  ├─ src/config/ # 数据库连接等配置
-│  ├─ src/routes/ # /api/login、/api/orders 等路由
-│  └─ src/models/ # UserModel、OrderModel
-├─ shared/        # 跨端常量、类型、工具
-├─ docs/          # 额外文档（部署、数据库、结构说明等）
-└─ package.json   # Monorepo 根配置与组合脚本
+├─ frontend/          # Next.js 14 (App Router) 前端
+│  ├─ app/            # 路由、三步向导、API Routes
+│  ├─ components/     # UI、设计工具、状态卡片
+│  ├─ contexts/       # 语言、认证上下文
+│  └─ lib/            # API 客户端、ComfyUI 客户端
+├─ backend/           # Express.js + pg REST API
+│  ├─ src/
+│  │  ├─ app.ts       # Express 主入口
+│  │  ├─ worker.ts    # 后台任务 Worker（RabbitMQ）
+│  │  ├─ queue/       # 消息队列与任务定义
+│  │  ├─ controllers/ # 业务控制器（含 AI 生图、虚拟试穿）
+│  │  ├─ routes/      # REST 路由
+│  │  ├─ models/      # 数据模型
+│  │  └─ release/     # 数据库迁移与发布检查
+│  └─ dist/           # 编译输出
+├─ shared/            # 跨端常量、类型、工具
+├─ docs/              # 详细文档（部署、架构、运维手册）
+├─ scripts/           # 运维脚本（密钥扫描、备份等）
+├─ .github/workflows/ # CI/CD 流水线
+└─ ecosystem.config.js # PM2 进程配置（单源）
 ```
 
-### 组件协同
+### 系统架构图
 
 ```
-[浏览器]
-   │  Next.js App Router (SSR/CSR)
-   ├─▶ /api/generate-image → ComfyUI (可选)
-   └─▶ apiClient → Express 后端 → PostgreSQL
-                    │
-                    └─ shared 库复用常量/类型
+┌─────────────┐     ┌──────────────┐     ┌──────────────┐
+│   Browser   │────▶│  Next.js     │────▶│  Express.js  │
+│             │     │  Frontend    │     │  Backend     │
+│             │     │  :3000       │     │  :8189       │
+└─────────────┘     └──────────────┘     └──────┬───────┘
+                                                │
+                              ┌─────────────────┼─────────────────┐
+                              │                 │                 │
+                         ┌────▼────┐     ┌──────▼──────┐  ┌──────▼──────┐
+                         │PostgreSQL│     │   RabbitMQ  │  │  ComfyUI    │
+                         │         │     │   Queue     │  │  :8188      │
+                         └─────────┘     └──────┬──────┘  └─────────────┘
+                                                │
+                                         ┌──────▼──────┐
+                                         │   Worker    │
+                                         │ (GPU 生图)  │
+                                         └─────────────┘
 ```
+
+---
 
 ## 🖥️ 前端（`frontend/`）
-- **技术栈**：Next.js 14 App Router、TypeScript、Tailwind CSS、Shadcn UI、Embla Carousel、React Hook Form、Zod、Sonner Toast
-- **核心页面**
-  - `app/design/page.tsx`：选择款式、颜色、尺码（向导第 1 步）
-  - `app/design/editor/page.tsx`：拖拽式设计画布，支持正背面、缩放、旋转
-  - `app/design/preview`：预览订单、提交到后端
-  - `app/auth/*`、`app/profile/*`：认证与资料管理
-- **设计工具**
-  - `components/design-tools/ai-generator.tsx`：ComfyUI 接入，支持多风格与进度反馈
-  - `components/design-tools/image-uploader.tsx`：上传自定义素材
-  - 文字编辑、颜色/字体选择、元素显示开关等高级交互
-- **状态管理**
-  - `contexts/language-context.tsx`：中英文切换
-  - `contexts/auth-context.tsx`：登录态持久化与 token 管理
-  - `lib/api-client.ts`：多 Base URL 探测、健康检查、自动附带 JWT
+
+**技术栈**：Next.js 14 App Router、TypeScript、Tailwind CSS、Shadcn UI、React Hook Form、Zod
+
+| 页面 | 路径 | 功能 |
+|------|------|------|
+| 设计向导 | `app/design/page.tsx` | 选择款式、颜色、尺码 |
+| 设计画布 | `app/design/editor/page.tsx` | 拖拽式编辑，支持正背面、缩放、旋转 |
+| 预览下单 | `app/design/preview/` | 预览订单、提交到后端 |
+| 认证 | `app/auth/*` | 注册、登录 |
+| 个人中心 | `app/profile/*` | 资料管理、订单历史 |
+
+**设计工具**：
+- `components/design-tools/ai-generator.tsx` — ComfyUI AI 生图，多风格与进度反馈
+- `components/design-tools/image-uploader.tsx` — 上传自定义素材
+- 文字编辑、颜色/字体选择、元素显示开关等
+
+---
 
 ## 🔙 后端（`backend/`）
-- **技术栈**：Express.js、TypeScript、pg、jsonwebtoken、bcrypt
-- **应用入口**：`src/app.ts`
-  - 加载环境变量、配置 CORS、JSON 解析、健康检查端点
-  - 连接 PostgreSQL 并自动建立 `users` / `orders` 表
-  - 注入路由 `createRoutes(pool)`，若数据库不可用则返回 503 友好提示
-- **路由层**：`src/routes/index.ts`
-  - `/api/register`、`/api/login`、`/api/profile`（含更新）
-  - `/api/orders`（创建、列表）
-  - `authenticate` 中间件解码 JWT 并注入 `req.userId`
-- **模型层**：`src/models/index.ts`
-  - `UserModel`：邮箱 / 用户名唯一校验，支持更新资料
-  - `OrderModel`：JSONB 存储订单项、设计元素、配送信息
 
-## 🔄 核心业务流程
+**技术栈**：Express.js、TypeScript、pg、jsonwebtoken、bcrypt、RabbitMQ
 
-### 设计与下单
-1. 选择款式/颜色/尺码并持久到 `localStorage`
-2. 设计画布中添加文字、上传图片或调用 AI 生成图
-3. 预览页整合 `selections + elements` 并展示价格明细
-4. 调用 `apiClient.createOrder` 将订单数据 POST 至 `/api/orders`
-5. 后端校验 JWT、写入数据库，返回订单编号与时间戳
+### 核心模块
 
-### AI 图像生成（ComfyUI）
-1. `AIGenerator` 通过 `/api/generate-image` API Route 调用后端
-2. `lib/simple-comfyui-client.ts` 组装工作流，投递到 ComfyUI `/prompt`
-3. 轮询 `/history` 获取结果，成功返回图片地址，失败回退占位图并展示错误
+| 模块 | 路径 | 说明 |
+|------|------|------|
+| 主服务 | `src/app.ts` | Express 入口，连接 DB，注册路由 |
+| Worker | `src/worker.ts` | 后台任务消费者（AI 生图、虚拟试穿） |
+| 控制器 | `src/controllers/` | aiController（ComfyUI）、orderController、userController |
+| 消息队列 | `src/queue/` | RabbitMQ 连接、任务定义、Worker 注册 |
+| 数据库迁移 | `src/release/` | 增量迁移与发布检查 |
+
+### REST API
+
+| 方法 | 路径 | 描述 |
+|------|------|------|
+| `GET` | `/` | 健康检查，返回版本与时间戳 |
+| `GET` | `/health` | API 状态，含 uptime、DB 连接 |
+| `POST` | `/api/register` | 注册，返回 JWT |
+| `POST` | `/api/login` | 登录，校验邮箱与密码 |
+| `GET` | `/api/profile` | 获取资料（需 Bearer Token） |
+| `PUT` | `/api/profile` | 更新用户名（含唯一性校验） |
+| `POST` | `/api/orders` | 新建订单（JSONB 存储） |
+| `GET` | `/api/orders` | 订单列表 |
+
+---
+
+## 🤖 AI 生图与虚拟试穿
+
+### ComfyUI 集成
+
+1. `AIGenerator` 通过 `/api/generate-image` 调用后端
+2. 后端通过 ComfyUI Client 组装工作流，投递到 ComfyUI `/prompt`
+3. 轮询 `/history` 获取结果，成功返回图片，失败回退占位图
 4. `ComfyUIStatusCard` 提供健康检查与启动指引
 
-### 鉴权与个人资料
-1. `AuthContext` 管理 token（localStorage `authToken`）
-2. API 请求自动附带 Bearer Token；后端使用 `authenticate` 中间件校验
-3. `/api/profile` 支持读取与更新用户名（冲突时返回 409）
+### 虚拟试穿（CatVTON）
+
+- 基于 CatVTON 模型，上传模特照 + 服装图即可生成试穿效果
+- 当前状态：DensePose 导入失败，待修复
+
+---
 
 ## ⚙️ 环境变量
 
-| 范围 | 文件 | 说明 |
-| ---- | ---- | ---- |
-| 根目录 | `.env.local.example` | Monorepo 通用示例配置 |
-| 前端 | `frontend/.env.local.example` | `NEXT_PUBLIC_API_URL` 支持多个备选地址（逗号分隔） |
-| 后端 | `backend/.env.example` | `DATABASE_URL`、`JWT_SECRET`、`FRONTEND_URL`、`EXPRESS_JSON_LIMIT` |
+| 范围 | 文件 | 关键变量 |
+|------|------|----------|
+| 根目录 | `.env.local.example` | Monorepo 通用配置 |
+| 前端 | `frontend/.env.local.example` | `NEXT_PUBLIC_API_URL`（逗号分隔多地址） |
+| 后端 | `backend/.env.example` | `DATABASE_URL`、`JWT_SECRET`、`COMFYUI_URL` |
 
 ```bash
 # 准备配置文件
@@ -143,110 +195,76 @@ JWT_SECRET=please-change-me
 COMFYUI_URL=http://127.0.0.1:8188
 ```
 
-## 🚀 本地运行
+---
+
+## 🔄 CI/CD（GitHub Actions）
+
+| Workflow | 触发条件 | 功能 |
+|----------|----------|------|
+| Secret Scan | PR / push to main | gitleaks 密钥扫描（含 .gitleaks.toml 白名单） |
+| Functional Gate | PR 触及 frontend/backend | 启动 PG 容器 → env 校验 → 功能测试 |
+| DB Release Gate | PR 触及 backend | 构建后端 → DB 迁移检查 |
+| Billing Reconciliation | 每日 02:20 UTC | 生产数据库账单对账 |
+| Security Readiness | PR | 环境变量安全校验 |
+| DR Readiness | 手动 | 灾难恢复就绪检查 |
+
+---
+
+## 🛠️ PM2 进程管理
 
 ```bash
-# 安装所有依赖
-npm run install:all
-
-# 启动前后端（并行）
-npm run dev
-
-# 单独启动
-npm run dev:frontend
-npm run dev:backend
-
-# 构建
-npm run build          # 前后端
-npm run build:frontend
-npm run build:backend
-
-# 启动高可用拓扑（2 API + 2 Worker + LB）
-npm run dev:infra:ha
+# ecosystem.config.js 是 PM2 配置的唯一来源
+pm2 start ecosystem.config.js
+pm2 save              # 持久化进程列表
+pm2 status            # 查看状态
+pm2 logs tshirt-backend
+pm2 restart tshirt-worker
 ```
 
-默认端口：Frontend http://localhost:3000，Backend http://localhost:8189。
+### 进程列表
 
-高可用拓扑下的负载均衡入口同样是 `http://localhost:8189`，并新增就绪探针 `GET /health/ready` 用于实例摘除与流量切换。
-
-##  REST API 摘要
-
-| 方法 | 路径 | 描述 |
-| ---- | ---- | ---- |
-| `GET /` | 健康检查 | 返回版本与时间戳 |
-| `GET /health` | API 状态 | 包含 uptime、数据库连接结果 |
-| `POST /api/register` | 注册 | 创建用户并返回 JWT |
-| `POST /api/login` | 登录 | 校验邮箱与密码，返回 JWT |
-| `GET /api/profile` | 获取资料 | 需要 Bearer Token |
-| `PUT /api/profile` | 更新资料 | 修改用户名（含唯一性校验） |
-| `POST /api/orders` | 新建订单 | 存储订单、设计及配送 JSON |
-| `GET /api/orders` | 订单列表 | 返回当前用户的订单历史 |
-
-更多细节详见 `backend/README.md` 与 `docs/api.md`。
-
-## 🤖 ComfyUI 集成与排障
-- `frontend/components/comfyui-status-card.tsx`：实时展示连接状态与启动指南
-- `frontend/lib/simple-comfyui-client.ts`：封装工作流、轮询历史、断线回退
-- `/api/generate-image`：统一处理成功 / 失败响应，失败时返回占位图与错误描述
-- 常见问题
-  1. 检查 `COMFYUI_URL` 是否可访问（默认 127.0.0.1:8188）
-  2. 查看后端日志确认数据库和 ComfyUI 连接是否成功
-  3. 使用界面上的“刷新状态”按钮重新检测
-
-## 📚 更多文档
-- `docs/PROJECT_STRUCTURE.md` — 前端与目录结构详解
-- `docs/VERCEL_DEPLOYMENT.md` — Vercel 部署步骤
-- `docs/databasereadme.md` — PostgreSQL 初始化与连接指南
-- `FRONTEND_COMPONENTS_README.md` — UI 组件说明
-- `README-ssh-access.md` — 从 SSH 公钥申请到服务器登录
-
-## 🤝 贡献与后续
-- 查看 `CONTRIBUTING.md` 获取开发规范与提交流程
-- 维护者脚本：`merge-pr.sh` / `merge-pr.ps1` 可加速合并 PR
-- 欢迎在 Issues / PR 中提出：设计工具增强、订单管理、支付接入、协同设计等想法
+| 进程名 | 入口 | 说明 |
+|--------|------|------|
+| tshirt-backend | `backend/dist/app.js` | Express API 服务 |
+| tshirt-frontend | `next start -p 3000` | Next.js 前端 |
+| tshirt-worker | `backend/dist/worker.js` | 后台任务 Worker |
 
 ---
 
-如需了解更多部署、架构或故障排查资讯，请结合 `docs/` 目录阅读。期待你的反馈，一起完善这套 AI 定制服装平台。
+## 🔧 故障排查
+
+| 问题 | 排查方法 |
+|------|----------|
+| 后端启动失败 | `pm2 logs tshirt-backend --lines 50`，检查 `DATABASE_URL` |
+| AI 生图失败 | 确认 ComfyUI 运行中：`curl http://127.0.0.1:8188/system_stats` |
+| Worker 卡死 | `pm2 restart tshirt-worker`，检查 RabbitMQ 连接 |
+| 虚拟试穿 400 | CatVTON DensePose 导入失败，待修复 |
+| DB 迁移失败 | `npm run release:db:check` 查看详细错误 |
+| CI Secret Scan 失败 | 检查 `.gitleaks.toml` 白名单是否覆盖 |
 
 ---
 
-## 🤖 How I Use an AI Agent to Maintain This Project
+## 📚 文档索引
 
-This project is actively maintained with help from an AI agent (GitHub Copilot in VS Code). The goal is to speed up routine operations while keeping production changes safe, reviewable, and traceable.
+| 文档 | 内容 |
+|------|------|
+| `docs/COMFYUI_README.md` | ComfyUI 集成详解 |
+| `docs/VERCEL_DEPLOYMENT.md` | Vercel 部署步骤 |
+| `docs/databasereadme.md` | PostgreSQL 初始化与连接 |
+| `docs/deployment/` | 部署指南 |
+| `docs/development/` | 开发环境搭建 |
+| `docs/architecture/` | 架构设计文档 |
+| `CONTRIBUTING.md` | 贡献规范与提交流程 |
 
-### What the AI Agent Helps With
+---
 
-- **Release checklists**: Runs preflight and readiness commands, captures outputs, and flags blockers.
-- **Environment hygiene**: Verifies critical env vars (ports, secrets, URLs) and prevents unsafe defaults.
-- **Operational runbooks**: Produces step-by-step deployment and rollback instructions for repeatability.
-- **Production hardening**: Adds rate limits, tightens CORS, and checks service exposure.
-- **Incident triage**: Summarizes logs and validates health checks to narrow root causes.
+## 🤝 贡献
 
-### Safety Rules I Follow
+1. Fork → Branch → PR
+2. 确保 CI 通过（Secret Scan + Functional Gate + DB Release Gate）
+3. 查看 `CONTRIBUTING.md` 获取详细规范
+4. 维护者脚本：`merge-pr.sh` / `merge-pr.ps1` 加速合并
 
-1. **No blind changes**: All config edits are explicit and backed up before modification.
-2. **Phase-by-phase execution**: Each phase is validated before moving forward.
-3. **No destructive commands**: Avoids anything that might reset or remove data.
-4. **Human gate on secrets**: Tokens and passwords are always entered by a human.
-5. **Clear verification steps**: Every change is followed by a concrete validation command.
+---
 
-### Typical Maintenance Workflow
-
-1. **Baseline checks**
-  - `pm2 status`
-  - `curl http://localhost:8189/health`
-  - `curl http://localhost:3000`
-2. **Build and validate**
-  - `npm run install:all`
-  - `npm run build`
-3. **Deploy safely**
-  - Restart services with PM2
-  - Verify endpoints and logs
-4. **Record outcomes**
-  - Capture outputs in a short status note for traceability
-
-### Why This Works
-
-The AI agent accelerates the mechanical parts of maintenance while I keep control of high-risk decisions (secrets, DNS changes, and production switches). This keeps the workflow fast, consistent, and auditable.
-
+*AI T-Shirt 设计平台 — 让每个人都能设计自己的衣服。*
