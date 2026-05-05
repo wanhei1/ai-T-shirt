@@ -512,9 +512,9 @@ class ApiClient {
   }
 
   getThumbnailUrl(orderId: number | string): string {
-    // Use envApiUrls[0] directly — determinedApiBaseUrl may not be resolved yet at render time
-    const base = envApiUrls[0] || 'http://localhost:8189';
-    return `${base}/api/orders/${orderId}/thumbnail`;
+    // Pick the first URL that isn't localhost/127.0.0.1 (unreachable from mobile browsers)
+    const publicUrl = envApiUrls.find(u => !u.includes('localhost') && !u.includes('127.0.0.1')) || envApiUrls[0] || 'http://localhost:8189';
+    return `${publicUrl}/api/orders/${orderId}/thumbnail`;
   }
 
   async createPaymentIntent(payload: { orderId: number; channel: 'alipay'; amount: number }) {

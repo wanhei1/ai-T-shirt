@@ -230,7 +230,7 @@ export class OrderModel {
     async getOrderSummariesByUserId(userId: number, limit = 30) {
         const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(100, Math.trunc(limit))) : 30;
         const query = `
-            SELECT id, created_at, status, payment_status, payment_channel, payment_order_id, paid_at, refund_status, refunded_at, sku_snapshot, production_slot_date, production_due_at, promised_ship_at, CASE WHEN canvas_front IS NOT NULL THEN true ELSE NULL END as has_front_image, CASE WHEN canvas_back IS NOT NULL THEN true ELSE NULL END as has_back_image
+            SELECT id, created_at, total, status, payment_status, payment_channel, payment_order_id, paid_at, refund_status, refunded_at, sku_snapshot, production_slot_date, production_due_at, promised_ship_at, CASE WHEN canvas_front IS NOT NULL THEN true ELSE NULL END as has_front_image, CASE WHEN canvas_back IS NOT NULL THEN true ELSE NULL END as has_back_image
             FROM orders
             WHERE user_id = $1
             ORDER BY created_at DESC
