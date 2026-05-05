@@ -512,7 +512,9 @@ class ApiClient {
   }
 
   getThumbnailUrl(orderId: number | string): string {
-    return `${determinedApiBaseUrl || potentialApiUrls[0]}/api/orders/${orderId}/thumbnail`;
+    // Use envApiUrls[0] directly — determinedApiBaseUrl may not be resolved yet at render time
+    const base = envApiUrls[0] || 'http://localhost:8189';
+    return `${base}/api/orders/${orderId}/thumbnail`;
   }
 
   async createPaymentIntent(payload: { orderId: number; channel: 'alipay'; amount: number }) {
