@@ -527,7 +527,6 @@ export class AllDesignModel {
                    a.source_order_id,
                    a.category,
                    a.selections,
-                     a.canvas_front,
                    a.created_at,
                    u.username,
                    COALESCE(s.sales_count, 0) AS sales_count

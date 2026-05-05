@@ -902,6 +902,34 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
         }
     });
 
+    router.get('/gallery/:designId/thumbnail', async (req, res) => {
+        try {
+            const designId = Number(req.params.designId);
+            if (!Number.isFinite(designId) || designId <= 0) {
+                return res.status(400).json({ message: 'Invalid design ID' });
+            }
+            const result = await pool.query(
+                'SELECT canvas_front FROM all_designs WHERE id = $1 LIMIT 1',
+                [designId]
+            );
+            const thumb = result.rows[0]?.canvas_front;
+            if (!thumb) {
+                return res.status(404).json({ message: 'Thumbnail not found' });
+            }
+            const match = thumb.match(/^data:(image\/\w+);base64,(.+)$/);
+            if (!match) {
+                return res.status(500).json({ message: 'Invalid image data' });
+            }
+            const buffer = Buffer.from(match[2], 'base64');
+            res.setHeader('Content-Type', match[1]);
+            res.setHeader('Cache-Control', 'public, max-age=86400');
+            res.send(buffer);
+        } catch (error) {
+            console.error('Gallery thumbnail error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
     router.get('/gallery/:designId', async (req, res) => {
         try {
             const designId = Number(req.params.designId);

@@ -517,6 +517,11 @@ class ApiClient {
     return `${publicUrl}/api/orders/${orderId}/thumbnail`;
   }
 
+  getGalleryThumbnailUrl(designId: number | string): string {
+    const publicUrl = envApiUrls.find(u => !u.includes('localhost') && !u.includes('127.0.0.1')) || envApiUrls[0] || 'http://localhost:8189';
+    return `${publicUrl}/api/gallery/${designId}/thumbnail`;
+  }
+
   async createPaymentIntent(payload: { orderId: number; channel: 'alipay'; amount: number }) {
     return this.request<CreatePaymentIntentResponse>('/api/payments/create-intent', {
       method: 'POST',

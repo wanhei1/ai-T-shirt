@@ -243,11 +243,8 @@ export default function ShopPage() {
               const firstImage = elements.find(
                 (el) => el.type === "image" || el.type === "ai-generated"
               );
-              const thumbnailSrc =
-                item.canvas_front ||
-                item.design?.canvas?.snapshots?.front ||
-                firstImage?.content ||
-                null;
+              // Use thumbnail API endpoint (gallery list no longer returns base64)
+              const thumbnailSrc = apiClient.getGalleryThumbnailUrl(item.order_id);
 
               return (
                 <Card key={String(item.order_id)} className="cursor-pointer hover:shadow-lg transition-shadow">
