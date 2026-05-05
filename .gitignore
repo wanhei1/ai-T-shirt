@@ -38,8 +38,12 @@ yarn-error.log*
 # uploads
 uploads/
 
-# env files
+# env files (except examples)
 .env*
+!.env.example
+!**/.env.example
+!.env.local.example
+!**/.env.local.example
 
 # vercel
 .vercel

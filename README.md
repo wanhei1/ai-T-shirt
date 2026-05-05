@@ -4,6 +4,38 @@
 
 > 生产环境示例：https://vercel.com/wanhei1s-projects/v0-t-shirt-design-editor
 
+## 🚀 快速开始
+
+```bash
+# 1. 克隆仓库
+git clone git@github.com:wanhei1/ai-T-shirt.git
+cd ai-T-shirt
+
+# 2. 安装依赖
+npm install
+
+# 3. 配置环境变量
+cp backend/.env.example backend/.env       # 填入数据库 URL、JWT_SECRET 等
+cp frontend/.env.local.example frontend/.env.local  # 填入 API URL、ComfyUI 地址
+
+# 4. 构建并启动
+cd shared && npm run build && cd ..
+cd backend && npm run build && cd ..
+cd frontend && npm run build && cd ..
+
+# 5. 使用 PM2 启动（推荐）
+pm2 start ecosystem.config.js
+# 或分别启动：
+#   cd backend && node dist/app.js
+#   cd frontend && npm start
+
+# 6. 验证
+curl http://localhost:8189/health   # 后端健康检查
+curl http://localhost:3000          # 前端页面
+```
+
+> **提示**：完整环境变量说明见 `backend/.env.example` 和 `frontend/.env.example`。
+
 ## ✨ 功能亮点
 - 三步设计流程：选择款式与配色 → 画布设计 → 预览确认
 - 设计画布支持文字、上传图片、AI 生成图像（ComfyUI）
