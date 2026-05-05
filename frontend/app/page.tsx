@@ -26,6 +26,7 @@ import { ApiConnectionTest } from "@/components/api-connection-test";
 import { useAuth } from "@/contexts/auth-context";
 import { useLanguage } from "@/contexts/language-context";
 import type { ApiClientError } from "@/lib/api-client";
+import { apiClient } from "@/lib/api-client";
 
 type MembershipRecord = {
   plan_id: string;
@@ -465,7 +466,7 @@ export default function HomePage() {
                         <CardContent className="space-y-3">
                           {preview.hasFront ? (
                             <NextImage
-                              src={`/api/orders/${order.id}/thumbnail`}
+                              src={apiClient.getThumbnailUrl(order.id)}
                               alt={`order-${order.id}-front`}
                               width={240}
                               height={160}
@@ -507,7 +508,7 @@ export default function HomePage() {
                         <CardContent className="space-y-3">
                           {preview.hasFront ? (
                             <NextImage
-                              src={`/api/orders/${order.id}/thumbnail`}
+                              src={apiClient.getThumbnailUrl(order.id)}
                               alt={`order-${order.id}-front`}
                               width={240}
                               height={160}
@@ -616,7 +617,7 @@ export default function HomePage() {
                         <p className="text-sm text-muted-foreground mb-2">{translate({ zh: "正面", en: "Front" })}</p>
                         {preview.hasFront ? (
                           <NextImage
-                            src={`/api/orders/${activeOrder.id}/thumbnail`}
+                            src={apiClient.getThumbnailUrl(activeOrder.id)}
                             alt={`order-${activeOrder.id}-front-full`}
                             width={400}
                             height={300}
@@ -633,7 +634,7 @@ export default function HomePage() {
                         <p className="text-sm text-muted-foreground mb-2">{translate({ zh: "背面", en: "Back" })}</p>
                         {preview.hasBack ? (
                           <NextImage
-                            src={`/api/orders/${activeOrder.id}/thumbnail`}
+                            src={apiClient.getThumbnailUrl(activeOrder.id)}
                             alt={`order-${activeOrder.id}-back-full`}
                             width={400}
                             height={300}
