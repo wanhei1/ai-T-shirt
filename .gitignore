@@ -84,32 +84,12 @@ venv/
 *.bin
 *.tflite
 
-# Large subprojects / generated assets (keep repo lightweight)
+# Large subprojects / ML dependencies (installed separately, not tracked in git)
 ComfyUI/
+CatVTON/
+detectron2/
 
-# detectron2: commit source, not nested repo/build artifacts
-detectron2/.git/
-detectron2/**/.git/
-detectron2/build/
-detectron2/**/build/
-detectron2/**/__pycache__/
-detectron2/**/*.pyc
-detectron2/**/*.pyo
-detectron2/**/*.so
-detectron2/**/*.o
-detectron2/**/.pytest_cache/
-detectron2/**/.mypy_cache/
-detectron2/**/.ruff_cache/
-detectron2/**/.eggs/
-detectron2/**/dist/
-detectron2/**/*.egg-info/
-
-# CatVTON: commit code, not nested repos/artifacts
-CatVTON/.git/
-CatVTON/**/.git/
-CatVTON/detectron2/_C*.so
-
-# ComfyUI runtime folders (in case ComfyUI is included later)
+# ComfyUI runtime folders
 **/models/
 **/input/
 **/output/
