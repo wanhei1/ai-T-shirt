@@ -3144,6 +3144,30 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
         }
     });
 
+    router.get('/orders/:id/thumbnail', authenticate, async (req, res) => {
+        try {
+            const orderId = Number(req.params.id);
+            if (!Number.isFinite(orderId) || orderId <= 0) {
+                return res.status(400).json({ message: 'Invalid order ID' });
+            }
+            const thumb = await orderReadModel.getOrderThumbnail(orderId, req.userId as number);
+            if (!thumb) {
+                return res.status(404).json({ message: 'Thumbnail not found' });
+            }
+            const match = thumb.match(/^data:(image\/\w+);base64,(.+)$/);
+            if (!match) {
+                return res.status(500).json({ message: 'Invalid image data' });
+            }
+            const buffer = Buffer.from(match[2], 'base64');
+            res.setHeader('Content-Type', match[1]);
+            res.setHeader('Cache-Control', 'public, max-age=86400');
+            res.send(buffer);
+        } catch (error) {
+            console.error('Thumbnail error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
     router.get('/orders', authenticate, async (req, res) => {
         try {
             if (!req.userId) return res.status(401).json({ message: 'User ID not found' });

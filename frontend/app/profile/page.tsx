@@ -26,6 +26,7 @@ import {
   Crown,
   Edit,
   Gift,
+  ImageIcon,
   Loader2,
   Mail,
   Save,
@@ -55,14 +56,8 @@ type OrderRecord = {
   payment_channel?: string | null;
   payment_order_id?: string | null;
   paid_at?: string | null;
-  design?: {
-    elements?: Array<{
-      type?: string;
-      content?: string;
-    }>;
-    selections?: Record<string, string>;
-  };
-  selections?: Record<string, string>;
+  has_front_image?: boolean | null;
+  has_back_image?: boolean | null;
 };
 
 type TrackingRecord = {
@@ -286,7 +281,7 @@ export default function ProfilePage() {
     const fetchOrders = async () => {
       try {
         const { apiClient } = await import("@/lib/api-client");
-        const response = await apiClient.getOrders();
+        const response = await apiClient.getOrderSummaries(30);
         setOrders(response.orders || []);
       } catch (error) {
         console.warn("Failed to fetch orders", error);
@@ -954,32 +949,21 @@ export default function ProfilePage() {
                     </p>
                   ) : (
                     <div className="space-y-3">
-                      {orders.map((order) => {
-                        const design = order.design || { elements: [], selections: {} };
-                        const firstImage = (design.elements || []).find(
-                          (element) =>
-                            element.type === "image" || element.type === "ai-generated"
-                        );
-                        const thumbnailSrc = firstImage?.content ?? null;
-
-                        return (
-                          <div
-                            key={order.id}
-                            className="flex items-center gap-4 rounded-lg border p-3"
-                          >
-                            {thumbnailSrc ? (
-                              <img
-                                src={thumbnailSrc}
-                                alt={`order-${order.id}`}
-                                className="h-16 w-16 rounded object-cover"
-                              />
-                            ) : (
-                              <div className="flex h-16 w-16 items-center justify-center rounded bg-muted text-xs font-medium">
-                                {((design.elements || []).length || 0)}
-                                {translate({ zh: " 个元素", en: " items" })}
-                              </div>
-                            )}
-                            <div className="flex-1">
+                      {orders.map((order) => (
+                        <div
+                          key={order.id}
+                          className="flex items-center gap-4 rounded-lg border p-3"
+                        >
+                          {order.has_front_image ? (
+                            <div className="flex h-16 w-16 items-center justify-center rounded bg-muted">
+                              <ImageIcon className="h-6 w-6 text-muted-foreground" />
+                            </div>
+                          ) : (
+                            <div className="flex h-16 w-16 items-center justify-center rounded bg-muted text-xs font-medium">
+                              {translate({ zh: "无预览", en: "No preview" })}
+                            </div>
+                          )}
+                          <div className="flex-1">
                               <div className="flex justify-between">
                                 <div>
                                   <div className="font-medium">
@@ -1006,7 +990,7 @@ export default function ProfilePage() {
                                 </div>
                               </div>
                               <div className="mt-2 text-sm text-muted-foreground">
-                                {translate({ zh: "版型：", en: "Style:" })} {order.selections?.style ?? "—"} • {translate({ zh: "颜色：", en: "Color:" })} {order.selections?.color ?? "—"} • {translate({ zh: "尺码：", en: "Size:" })} {order.selections?.size ?? "—"}
+                                {translate({ zh: "订单", en: "Order" })} #{order.id}
                               </div>
                               <div className="mt-3">
                                 <Button
@@ -1051,8 +1035,8 @@ export default function ProfilePage() {
                               )}
                             </div>
                           </div>
-                        );
-                      })}
+                        ))
+                      }
                     </div>
                   )}
                 </div>

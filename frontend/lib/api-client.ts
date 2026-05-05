@@ -511,6 +511,10 @@ class ApiClient {
     });
   }
 
+  getThumbnailUrl(orderId: number | string): string {
+    return `${determinedApiBaseUrl || potentialApiUrls[0]}/api/orders/${orderId}/thumbnail`;
+  }
+
   async createPaymentIntent(payload: { orderId: number; channel: 'alipay'; amount: number }) {
     return this.request<CreatePaymentIntentResponse>('/api/payments/create-intent', {
       method: 'POST',

@@ -21,6 +21,7 @@ import {
   Crown,
 } from "lucide-react";
 import Link from "next/link";
+import NextImage from "next/image";
 import { ApiConnectionTest } from "@/components/api-connection-test";
 import { useAuth } from "@/contexts/auth-context";
 import { useLanguage } from "@/contexts/language-context";
@@ -36,9 +37,8 @@ type OrderRecord = {
   id: number | string;
   created_at: string;
   status?: string;
-  selections?: Record<string, any>;
-  canvas_front?: string | null;
-  canvas_back?: string | null;
+  has_front_image?: boolean | null;
+  has_back_image?: boolean | null;
 };
 
 export default function HomePage() {
@@ -110,7 +110,7 @@ export default function HomePage() {
       try {
         setIsLoadingOrders(true);
         const { apiClient } = await import("@/lib/api-client");
-        const response = await apiClient.getOrderSummaries(30);
+        const response = await apiClient.getOrderSummaries(10);
         if (isMounted) {
           setMyOrders((response.orders || []) as OrderRecord[]);
         }
@@ -164,8 +164,8 @@ export default function HomePage() {
 
   const getOrderPreviews = (order?: OrderRecord | null) => {
     return {
-      front: order?.canvas_front || null,
-      back: order?.canvas_back || null,
+      hasFront: !!order?.has_front_image,
+      hasBack: !!order?.has_back_image,
     };
   };
 
@@ -463,10 +463,14 @@ export default function HomePage() {
                           </CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-3">
-                          {preview.front ? (
-                            <img
-                              src={preview.front}
+                          {preview.hasFront ? (
+                            <NextImage
+                              src={`/api/orders/${order.id}/thumbnail`}
                               alt={`order-${order.id}-front`}
+                              width={240}
+                              height={160}
+                              unoptimized
+                              loading="lazy"
                               className="h-40 w-full rounded-md object-cover"
                             />
                           ) : (
@@ -501,10 +505,14 @@ export default function HomePage() {
                           </CardDescription>
                         </CardHeader>
                         <CardContent className="space-y-3">
-                          {preview.front ? (
-                            <img
-                              src={preview.front}
+                          {preview.hasFront ? (
+                            <NextImage
+                              src={`/api/orders/${order.id}/thumbnail`}
                               alt={`order-${order.id}-front`}
+                              width={240}
+                              height={160}
+                              unoptimized
+                              loading="lazy"
                               className="h-40 w-full rounded-md object-cover"
                             />
                           ) : (
@@ -606,10 +614,13 @@ export default function HomePage() {
                     <>
                       <div>
                         <p className="text-sm text-muted-foreground mb-2">{translate({ zh: "正面", en: "Front" })}</p>
-                        {preview.front ? (
-                          <img
-                            src={preview.front}
+                        {preview.hasFront ? (
+                          <NextImage
+                            src={`/api/orders/${activeOrder.id}/thumbnail`}
                             alt={`order-${activeOrder.id}-front-full`}
+                            width={400}
+                            height={300}
+                            unoptimized
                             className="w-full rounded-md object-cover"
                           />
                         ) : (
@@ -620,10 +631,13 @@ export default function HomePage() {
                       </div>
                       <div>
                         <p className="text-sm text-muted-foreground mb-2">{translate({ zh: "背面", en: "Back" })}</p>
-                        {preview.back ? (
-                          <img
-                            src={preview.back}
+                        {preview.hasBack ? (
+                          <NextImage
+                            src={`/api/orders/${activeOrder.id}/thumbnail`}
                             alt={`order-${activeOrder.id}-back-full`}
+                            width={400}
+                            height={300}
+                            unoptimized
                             className="w-full rounded-md object-cover"
                           />
                         ) : (
