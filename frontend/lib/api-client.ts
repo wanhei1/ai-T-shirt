@@ -350,12 +350,13 @@ class ApiClient {
     const formattedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
     const url = `${baseUrl}${formattedEndpoint}`;
 
+    const { headers: optionHeaders, ...restOptions } = options;
     const config: RequestInit = {
+      ...restOptions,
       headers: {
         'Content-Type': 'application/json',
-        ...options.headers,
+        ...optionHeaders,
       },
-      ...options,
     };
 
     // Add auth token only on the client-side.
