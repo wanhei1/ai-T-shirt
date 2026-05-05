@@ -28,14 +28,22 @@ artifacts/perf/
 dist/
 **/dist/
 
-# debug
+# debug / logs
+*.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 
-# env files
+# uploads
+uploads/
+
+# env files (except examples)
 .env*
+!.env.example
+!**/.env.example
+!.env.local.example
+!**/.env.local.example
 
 # vercel
 .vercel
