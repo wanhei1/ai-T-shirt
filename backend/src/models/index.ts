@@ -272,8 +272,6 @@ export class OrderModel {
                 o.address,
                 o.phone,
                 o.order_time,
-                o.canvas_front,
-                o.canvas_back,
                 o.canvas_meta,
                 o.source_all_id,
                 o.created_at,

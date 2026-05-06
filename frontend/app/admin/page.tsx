@@ -1136,8 +1136,8 @@ export default function AdminPage() {
                       const backCanvas = order.design?.canvas?.snapshots?.back || null;
                       const frontElementOnly = order.design?.canvas?.elementSnapshots?.front || null;
                       const backElementOnly = order.design?.canvas?.elementSnapshots?.back || null;
-                      const frontTryOn = order.canvas_front || null;
-                      const backTryOn = order.canvas_back || null;
+                      const frontTryOn = order.id ? `/backend/api/orders/${order.id}/thumbnail` : null;
+                      const backTryOn = null; // backend thumbnail only returns canvas_front
                       return (
                         <>
                           <div>
