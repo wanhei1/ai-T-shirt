@@ -11,7 +11,7 @@ module.exports = {
     {
       name: 'tshirt-frontend',
       script: 'node_modules/.bin/next',
-      args: 'start -p 3000',
+      args: 'start -p 3000 -H 127.0.0.1',
       cwd: 'frontend',
       interpreter: '/usr/bin/node',
       autorestart: true,

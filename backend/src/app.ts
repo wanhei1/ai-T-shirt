@@ -381,7 +381,8 @@ const initializeApp = async () => {
             });
         });
 
-        app.listen(PORT, () => {
+        // ✅ 安全修复：仅监听 127.0.0.1，禁止公网直连
+        app.listen(Number(PORT), '127.0.0.1', () => {
             console.log(`🚀 Backend server is running on port ${PORT}`);
             console.log(`📡 API available at http://localhost:${PORT}/api`);
             console.log(`💚 Health check at http://localhost:${PORT}/health`);
