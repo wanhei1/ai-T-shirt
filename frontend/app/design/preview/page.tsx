@@ -109,7 +109,10 @@ export default function PreviewPage() {
   const [currentView, setCurrentView] = useState<"front" | "back">("front")
   const [isExporting, setIsExporting] = useState(false)
   const [orderPlaced, setOrderPlaced] = useState(false)
+  const [showPayment, setShowPayment] = useState(false)
+  const [placedOrderId, setPlacedOrderId] = useState<number | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [paymentConfirming, setPaymentConfirming] = useState(false)
   const [isTryOnLoading, setIsTryOnLoading] = useState(false)
   const [tryOnError, setTryOnError] = useState<string | null>(null)
   const [tryOnEnabled, setTryOnEnabled] = useState(false)
@@ -756,11 +759,11 @@ export default function PreviewPage() {
         address: address.trim()
       };
 
-      await apiClient.createOrder(payload);
+      const result = await apiClient.createOrder(payload);
+      const orderId = (result as any)?.order?.id || (result as any)?.id;
+      setPlacedOrderId(orderId || null);
+      setShowPayment(true);
       setOrderPlaced(true);
-      setTimeout(() => {
-        router.push("/profile");
-      }, 2000);
     } catch (error) {
       console.error('Order submission failed:', error)
       const err = error as ApiClientError
@@ -806,23 +809,74 @@ export default function PreviewPage() {
     )
   }
 
-  if (orderPlaced) {
+  if (orderPlaced && showPayment) {
+    const handleConfirmPayment = async () => {
+      if (!placedOrderId) {
+        router.push("/profile");
+        return;
+      }
+      setPaymentConfirming(true);
+      try {
+        await apiClient.createPaymentIntent({
+          orderId: placedOrderId,
+          channel: "alipay",
+          amount: estimatedTotal,
+        });
+      } catch {
+        // ignore — payment intent is best-effort
+      }
+      router.push("/profile");
+    };
+
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
-        <Card className="max-w-md mx-auto text-center">
-          <CardContent className="pt-6">
-            <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-4">
-              <Check className="w-8 h-8 text-green-600" />
+      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+        <Card className="max-w-sm w-full text-center">
+          <CardContent className="pt-6 space-y-4">
+            <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto">
+              <Check className="w-8 h-8 text-blue-600" />
             </div>
-            <h2 className="text-2xl font-bold mb-2">Order Placed!</h2>
-            <p className="text-muted-foreground mb-4">
-              Thank you for your order. You’ll receive a confirmation email shortly.
+            <h2 className="text-xl font-bold">
+              {translate({ zh: "订单已创建", en: "Order Placed!" })}
+            </h2>
+            <p className="text-sm text-muted-foreground">
+              {translate({
+                zh: "请使用支付宝扫描下方二维码完成支付",
+                en: "Scan the QR code below with Alipay to complete payment",
+              })}
             </p>
-            <p className="text-sm text-muted-foreground">Redirecting to homepage...</p>
+            <div className="flex justify-center">
+              <img
+                src="/alipay-qr.jpg"
+                alt="Alipay QR Code"
+                className="w-56 h-56 rounded-lg border"
+              />
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {translate({
+                zh: `支付金额：¥${estimatedTotal.toFixed(2)}`,
+                en: `Amount: ¥${estimatedTotal.toFixed(2)}`,
+              })}
+            </p>
+            <Button
+              onClick={handleConfirmPayment}
+              className="w-full"
+              disabled={paymentConfirming}
+            >
+              {paymentConfirming
+                ? translate({ zh: "处理中...", en: "Processing..." })
+                : translate({ zh: "我已支付", en: "I've Paid" })}
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => router.push("/profile")}
+              className="w-full"
+            >
+              {translate({ zh: "稍后支付", en: "Pay Later" })}
+            </Button>
           </CardContent>
         </Card>
       </div>
-    )
+    );
   }
 
   return (
