@@ -33,6 +33,7 @@ import { ImageUploader } from "@/components/design-tools/image-uploader"
 import { useLanguage, type LanguageText } from "@/contexts/language-context"
 import { buildCanvasMeta, CANVAS_SIZE, getShirtColorHex, getShirtPhotoSrc, PRINT_AREA } from "@/lib/design-canvas"
 import { externalizeDesignAssets } from "@/lib/design-storage"
+import { useIsMobile } from "@/hooks/use-mobile"
 import apiClient, { type ApiClientError } from "@/lib/api-client"
 import { pollJobUntilDone } from "@/lib/job-polling"
 import type { DesignElement, TShirtSelections } from "@/types/design"
@@ -153,6 +154,7 @@ const getTryOnModelSrc = (gender: TryOnModelGender, side: "front" | "back") => {
 
 export default function DesignEditorPage() {
   const router = useRouter()
+  const isMobile = useIsMobile()
   const canvasRef = useRef<HTMLDivElement>(null)
   const printAreaRef = useRef<HTMLDivElement>(null)
   const hasLoadedDesignRef = useReactRef(false)
@@ -196,6 +198,7 @@ export default function DesignEditorPage() {
   const [fontSize, setFontSize] = useState<number[]>([24])
   const [selectedFont, setSelectedFont] = useState("Arial")
   const [selectedColor, setSelectedColor] = useState("#000000")
+  const [mobileToolOpen, setMobileToolOpen] = useState(false)
 
   const [tryOnModelGender, setTryOnModelGender] = useState<TryOnModelGender>(() => {
     if (typeof window === "undefined") return "male"
@@ -774,7 +777,7 @@ export default function DesignEditorPage() {
     }
   }, [designElements, selections, canvasMeta, hydrated, isDragging, isResizing, isRotating])
 
-  const handleMouseDown = (e: React.MouseEvent, elementId: string, action: "drag" | "resize" | "rotate" = "drag") => {
+  const handlePointerDown = (e: React.PointerEvent, elementId: string, action: "drag" | "resize" | "rotate" = "drag") => {
     e.preventDefault()
     e.stopPropagation()
 
@@ -808,7 +811,7 @@ export default function DesignEditorPage() {
     }
   }
 
-  const handleMouseMove = (e: React.MouseEvent) => {
+  const handlePointerMove = (e: React.PointerEvent) => {
     applyPointerMove(e.clientX, e.clientY)
   }
 
@@ -866,7 +869,7 @@ export default function DesignEditorPage() {
     }
   }
 
-  const handleMouseUp = () => {
+  const handlePointerUp = () => {
     isDraggingRef.current = false
     isResizingRef.current = false
     isRotatingRef.current = false
@@ -878,20 +881,20 @@ export default function DesignEditorPage() {
   useEffect(() => {
     if (!isDragging && !isResizing && !isRotating) return
 
-    const onMove = (e: MouseEvent) => {
+    const onMove = (e: PointerEvent) => {
       applyPointerMove(e.clientX, e.clientY)
     }
 
     const onUp = () => {
-      handleMouseUp()
+      handlePointerUp()
     }
 
-    window.addEventListener("mousemove", onMove)
-    window.addEventListener("mouseup", onUp)
+    window.addEventListener("pointermove", onMove)
+    window.addEventListener("pointerup", onUp)
 
     return () => {
-      window.removeEventListener("mousemove", onMove)
-      window.removeEventListener("mouseup", onUp)
+      window.removeEventListener("pointermove", onMove)
+      window.removeEventListener("pointerup", onUp)
     }
   }, [isDragging, isResizing, isRotating])
 
@@ -1136,63 +1139,71 @@ export default function DesignEditorPage() {
       {/* Header */}
       <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-4">
+          <div className={`flex items-center ${isMobile ? "gap-2" : "gap-4"}`}>
             <Button variant="ghost" size="sm" asChild>
               <Link href="/design">
                 <ArrowLeft className="w-4 h-4 mr-2" />
-                {translate({ zh: "返回", en: "Back" })}
+                {!isMobile && translate({ zh: "返回", en: "Back" })}
               </Link>
             </Button>
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-                <Palette className="w-5 h-5 text-primary-foreground" />
+            {!isMobile && (
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
+                  <Palette className="w-5 h-5 text-primary-foreground" />
+                </div>
+                <span className="text-xl font-bold text-foreground">
+                  {translate({ zh: "yituai", en: "yituai" })}
+                </span>
               </div>
-              <span className="text-xl font-bold text-foreground">
-                {translate({ zh: "yituai", en: "yituai" })}
-              </span>
-            </div>
+            )}
           </div>
-          <div className="flex items-center gap-4">
-            <Badge variant="outline">
-              {translate({ zh: "第 2 步 / 共 3 步", en: "Step 2 of 3" })}
+          <div className={`flex items-center ${isMobile ? "gap-1.5 flex-wrap" : "gap-4"}`}>
+            <Badge variant="outline" className={isMobile ? "text-xs px-1.5" : ""}>
+              {isMobile
+                ? translate({ zh: "2/3", en: "2/3" })
+                : translate({ zh: "第 2 步 / 共 3 步", en: "Step 2 of 3" })}
             </Badge>
 
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-muted-foreground">
-                {translate({ zh: "模特", en: "Model" })}
-              </span>
-              <div className="flex items-center gap-1">
+            <div className={`flex items-center ${isMobile ? "gap-1" : "gap-2"}`}>
+              {!isMobile && (
+                <span className="text-sm text-muted-foreground">
+                  {translate({ zh: "模特", en: "Model" })}
+                </span>
+              )}
+              <div className={`flex items-center ${isMobile ? "gap-0.5" : "gap-1"}`}>
                 <Button
                   type="button"
                   size="sm"
+                  className={isMobile ? "h-8 px-2" : ""}
                   variant={tryOnModelGender === "male" ? "default" : "outline"}
                   onClick={() => setTryOnModelGender("male")}
                   disabled={isContinuingToPreview}
                 >
-                  {translate({ zh: "男", en: "Male" })}
+                  {isMobile ? translate({ zh: "男", en: "M" }) : translate({ zh: "男", en: "Male" })}
                 </Button>
                 <Button
                   type="button"
                   size="sm"
+                  className={isMobile ? "h-8 px-2" : ""}
                   variant={tryOnModelGender === "female" ? "default" : "outline"}
                   onClick={() => setTryOnModelGender("female")}
                   disabled={isContinuingToPreview}
                 >
-                  {translate({ zh: "女", en: "Female" })}
+                  {isMobile ? translate({ zh: "女", en: "F" }) : translate({ zh: "女", en: "Female" })}
                 </Button>
               </div>
             </div>
 
             <Button onClick={handleContinueToPreview} disabled={designElements.length === 0 || isContinuingToPreview}>
               {isContinuingToPreview ? (
-                <div className="w-[220px] flex items-center gap-3">
+                <div className={`${isMobile ? "w-[120px]" : "w-[220px]"} flex items-center gap-3`}>
                   <Progress value={continuePercent} className="flex-1" />
                   <span className="text-sm tabular-nums w-12 text-right">{continuePercent}%</span>
                 </div>
               ) : (
                 <>
-                  {translate({ zh: "前往预览", en: "Continue to Preview" })}
-                  <ArrowRight className="w-4 h-4 ml-2" />
+                  {!isMobile && translate({ zh: "前往预览", en: "Continue to Preview" })}
+                  <ArrowRight className={`w-4 h-4 ${isMobile ? "" : "ml-2"}`} />
                 </>
               )}
             </Button>
@@ -1200,9 +1211,12 @@ export default function DesignEditorPage() {
         </div>
       </header>
 
-      <div className="flex h-[calc(100vh-80px)] overflow-hidden">
+      <div className={`flex ${isMobile ? "flex-col" : ""} h-[calc(100vh-80px)] overflow-hidden`}>
         {/* Left Sidebar - Tools */}
-        <div className="w-80 border-r border-border bg-card/30 flex flex-col">
+        <div className={isMobile
+          ? `order-3 flex flex-col bg-card border-t border-border transition-all duration-300 ${mobileToolOpen ? "max-h-[50vh]" : "max-h-0 overflow-hidden"}`
+          : "w-80 border-r border-border bg-card/30 flex flex-col"
+        }>
           <div className="p-4 flex-1 overflow-y-auto">
             <h2 className="text-lg font-semibold mb-4">
               {translate({ zh: "设计工具", en: "Design Tools" })}
@@ -1404,7 +1418,7 @@ export default function DesignEditorPage() {
         </div>
 
         {/* Main Canvas Area */}
-        <div className="flex-1 flex flex-col min-w-0">
+        <div className={`flex-1 flex flex-col min-w-0 ${isMobile ? "order-1 overflow-hidden" : ""}`}>
           {/* Canvas Controls */}
           <div className="border-b border-border p-4 bg-card/30 shrink-0">
             <div className="flex items-center justify-between">
@@ -1507,6 +1521,7 @@ export default function DesignEditorPage() {
                   height: CANVAS_SIZE.height,
                   transform: `scale(${canvasZoom})`,
                   transformOrigin: "center",
+                  touchAction: "none",
                 }}
               >
                   {isDev && isCalibratingPrintArea && (
@@ -1567,8 +1582,8 @@ export default function DesignEditorPage() {
                       width: printArea.width,
                       height: printArea.height,
                     }}
-                    onMouseMove={handleMouseMove}
-                    onMouseUp={handleMouseUp}
+                    onPointerMove={handlePointerMove}
+                    onPointerUp={handlePointerUp}
                   >
                     <div className="absolute inset-0 pointer-events-none border border-white/50 rounded" />
 
@@ -1585,7 +1600,7 @@ export default function DesignEditorPage() {
                           height: element.height,
                           transform: `rotate(${element.rotation}deg)`
                         }}
-                        onMouseDown={(e) => handleMouseDown(e, element.id, "drag")}
+                        onPointerDown={(e) => handlePointerDown(e, element.id, "drag")}
                         onClick={(e) => {
                           e.stopPropagation()
                           setSelectedElement(element.id)
@@ -1618,25 +1633,25 @@ export default function DesignEditorPage() {
                         {selectedElement === element.id && (
                           <>
                             <div
-                              className="absolute -top-2 -left-2 w-4 h-4 bg-primary rounded-full cursor-nw-resize border-2 border-white shadow-md hover:scale-110 transition-transform"
-                              onMouseDown={(e) => handleMouseDown(e, element.id, "resize")}
+                              className="absolute -top-4 -left-4 w-8 h-8 md:-top-2 md:-left-2 md:w-4 md:h-4 bg-primary rounded-full cursor-nw-resize border-2 border-white shadow-md hover:scale-110 transition-transform"
+                              onPointerDown={(e) => handlePointerDown(e, element.id, "resize")}
                             />
                             <div
-                              className="absolute -top-2 -right-2 w-4 h-4 bg-primary rounded-full cursor-ne-resize border-2 border-white shadow-md hover:scale-110 transition-transform"
-                              onMouseDown={(e) => handleMouseDown(e, element.id, "resize")}
+                              className="absolute -top-4 -right-4 w-8 h-8 md:-top-2 md:-right-2 md:w-4 md:h-4 bg-primary rounded-full cursor-ne-resize border-2 border-white shadow-md hover:scale-110 transition-transform"
+                              onPointerDown={(e) => handlePointerDown(e, element.id, "resize")}
                             />
                             <div
-                              className="absolute -bottom-2 -left-2 w-4 h-4 bg-primary rounded-full cursor-sw-resize border-2 border-white shadow-md hover:scale-110 transition-transform"
-                              onMouseDown={(e) => handleMouseDown(e, element.id, "resize")}
+                              className="absolute -bottom-4 -left-4 w-8 h-8 md:-bottom-2 md:-left-2 md:w-4 md:h-4 bg-primary rounded-full cursor-sw-resize border-2 border-white shadow-md hover:scale-110 transition-transform"
+                              onPointerDown={(e) => handlePointerDown(e, element.id, "resize")}
                             />
                             <div
-                              className="absolute -bottom-2 -right-2 w-4 h-4 bg-primary rounded-full cursor-se-resize border-2 border-white shadow-md hover:scale-110 transition-transform"
-                              onMouseDown={(e) => handleMouseDown(e, element.id, "resize")}
+                              className="absolute -bottom-4 -right-4 w-8 h-8 md:-bottom-2 md:-right-2 md:w-4 md:h-4 bg-primary rounded-full cursor-se-resize border-2 border-white shadow-md hover:scale-110 transition-transform"
+                              onPointerDown={(e) => handlePointerDown(e, element.id, "resize")}
                             />
 
                             <div
-                              className="absolute -top-8 left-1/2 transform -translate-x-1/2 w-4 h-4 bg-green-500 rounded-full cursor-grab border-2 border-white shadow-md hover:scale-110 transition-transform"
-                              onMouseDown={(e) => handleMouseDown(e, element.id, "rotate")}
+                              className="absolute -top-8 left-1/2 transform -translate-x-1/2 w-8 h-8 md:w-4 md:h-4 bg-green-500 rounded-full cursor-grab border-2 border-white shadow-md hover:scale-110 transition-transform"
+                              onPointerDown={(e) => handlePointerDown(e, element.id, "rotate")}
                               title={translate({ zh: "拖曳以旋转", en: "Drag to rotate" })}
                             />
 
@@ -1675,6 +1690,69 @@ export default function DesignEditorPage() {
               </div>
             </div>
         </div>
+
+        {/* Mobile Bottom Toolbar */}
+        {isMobile && (
+          <div className="order-2 shrink-0 flex items-center justify-around bg-card border-t border-border py-3 px-2">
+            <button
+              type="button"
+              className={`flex flex-col items-center gap-1 px-4 py-2 rounded-md transition-colors ${
+                activeTab === "ai" && mobileToolOpen
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted"
+              }`}
+              onClick={() => {
+                setActiveTab("ai")
+                setMobileToolOpen(activeTab === "ai" ? !mobileToolOpen : true)
+              }}
+            >
+              <Sparkles className="w-5 h-5" />
+              <span className="text-[10px]">AI</span>
+            </button>
+            <button
+              type="button"
+              className={`flex flex-col items-center gap-1 px-4 py-2 rounded-md transition-colors ${
+                activeTab === "text" && mobileToolOpen
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted"
+              }`}
+              onClick={() => {
+                setActiveTab("text")
+                setMobileToolOpen(activeTab === "text" ? !mobileToolOpen : true)
+              }}
+            >
+              <Type className="w-5 h-5" />
+              <span className="text-[10px]">{translate({ zh: "文字", en: "Text" })}</span>
+            </button>
+            <button
+              type="button"
+              className={`flex flex-col items-center gap-1 px-4 py-2 rounded-md transition-colors ${
+                activeTab === "upload" && mobileToolOpen
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted"
+              }`}
+              onClick={() => {
+                setActiveTab("upload")
+                setMobileToolOpen(activeTab === "upload" ? !mobileToolOpen : true)
+              }}
+            >
+              <Upload className="w-5 h-5" />
+              <span className="text-[10px]">{translate({ zh: "上传", en: "Upload" })}</span>
+            </button>
+            <button
+              type="button"
+              className="flex flex-col items-center gap-1 px-4 py-2 rounded-md transition-colors text-muted-foreground hover:bg-muted"
+              onClick={() => {
+                setActiveTab("text")
+                setMobileToolOpen(true)
+              }}
+            >
+              <Palette className="w-5 h-5" />
+              <span className="text-[10px]">{translate({ zh: "颜色", en: "Color" })}</span>
+            </button>
+          </div>
+        )}
+
       </div>
     </div>
   )
