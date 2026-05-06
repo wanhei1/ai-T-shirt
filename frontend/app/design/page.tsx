@@ -101,7 +101,7 @@ export default function DesignPage() {
         <div className="container mx-auto px-4 py-8">
           {/* Progress Steps */}
           <div className="flex items-center justify-center mb-8">
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-4 flex-wrap justify-center">
               <div className="flex items-center gap-2">
                 <div className="w-8 h-8 bg-primary text-primary-foreground rounded-full flex items-center justify-center text-sm font-semibold">
                   1
@@ -149,7 +149,7 @@ export default function DesignPage() {
               <div className="space-y-6">
                 <Card>
                   <CardContent className="p-6">
-                    <div className="h-[520px] md:h-[600px] bg-muted rounded-lg mb-4 flex items-center justify-center overflow-hidden">
+                    <div className="h-[280px] sm:h-[400px] md:h-[520px] lg:h-[600px] bg-muted rounded-lg mb-4 flex items-center justify-center overflow-hidden">
                       <img
                         src={selectedStyleData?.image || "/placeholder.svg"}
                         alt={

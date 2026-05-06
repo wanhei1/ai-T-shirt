@@ -707,7 +707,7 @@ export default function ProfilePage() {
                       </div>
                       <Button
                         variant="outline"
-                        size="sm"
+                        size="default"
                         onClick={handleCopyInviteCode}
                         disabled={!referralMe?.invite_code}
                       >
@@ -996,7 +996,7 @@ export default function ProfilePage() {
                                 <Button
                                   type="button"
                                   variant="outline"
-                                  size="sm"
+                                  size="default"
                                   onClick={() => handleToggleTracking(order.id)}
                                   disabled={trackingLoadingOrderId === Number(order.id)}
                                 >

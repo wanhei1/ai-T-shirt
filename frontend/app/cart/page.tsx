@@ -230,7 +230,7 @@ export default function CartPage() {
                           <div className="flex items-center gap-3">
                             <Button
                               variant="outline"
-                              size="sm"
+                              size="default"
                               className="bg-transparent"
                               onClick={() => updateQuantity(item.id, Math.max(1, item.quantity - 1))}
                             >
@@ -239,7 +239,7 @@ export default function CartPage() {
                             <div className="min-w-[40px] text-center">{item.quantity}</div>
                             <Button
                               variant="outline"
-                              size="sm"
+                              size="default"
                               className="bg-transparent"
                               onClick={() => updateQuantity(item.id, item.quantity + 1)}
                             >

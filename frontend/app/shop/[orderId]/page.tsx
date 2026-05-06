@@ -337,7 +337,7 @@ export default function ShopDetailPage({ params }: { params: Promise<{ orderId: 
                           type="button"
                           size="sm"
                           variant="outline"
-                          className="h-7 px-2 bg-transparent"
+                          className="h-11 px-3 min-w-[44px] bg-transparent"
                           onClick={() => setZoomFront((z) => clampZoom(z - 0.25))}
                         >
                           -
@@ -349,7 +349,7 @@ export default function ShopDetailPage({ params }: { params: Promise<{ orderId: 
                           type="button"
                           size="sm"
                           variant="outline"
-                          className="h-7 px-2 bg-transparent"
+                          className="h-11 px-3 min-w-[44px] bg-transparent"
                           onClick={() => setZoomFront((z) => clampZoom(z + 0.25))}
                         >
                           +
@@ -358,7 +358,7 @@ export default function ShopDetailPage({ params }: { params: Promise<{ orderId: 
                           type="button"
                           size="sm"
                           variant="ghost"
-                          className="h-7 px-2"
+                          className="h-11 px-3 min-w-[44px]"
                           onClick={() => setZoomFront(1)}
                         >
                           {translate({ zh: "重置", en: "Reset" })}
@@ -397,7 +397,7 @@ export default function ShopDetailPage({ params }: { params: Promise<{ orderId: 
                           type="button"
                           size="sm"
                           variant="outline"
-                          className="h-7 px-2 bg-transparent"
+                          className="h-11 px-3 min-w-[44px] bg-transparent"
                           onClick={() => setZoomBack((z) => clampZoom(z - 0.25))}
                         >
                           -
@@ -409,7 +409,7 @@ export default function ShopDetailPage({ params }: { params: Promise<{ orderId: 
                           type="button"
                           size="sm"
                           variant="outline"
-                          className="h-7 px-2 bg-transparent"
+                          className="h-11 px-3 min-w-[44px] bg-transparent"
                           onClick={() => setZoomBack((z) => clampZoom(z + 0.25))}
                         >
                           +
@@ -418,7 +418,7 @@ export default function ShopDetailPage({ params }: { params: Promise<{ orderId: 
                           type="button"
                           size="sm"
                           variant="ghost"
-                          className="h-7 px-2"
+                          className="h-11 px-3 min-w-[44px]"
                           onClick={() => setZoomBack(1)}
                         >
                           {translate({ zh: "重置", en: "Reset" })}

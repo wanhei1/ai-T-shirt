@@ -123,3 +123,16 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Mobile optimizations */
+@media (max-width: 767px) {
+  /* Prevent 300ms click delay */
+  * {
+    touch-action: manipulation;
+  }
+  /* Canvas areas need direct touch */
+  .print-area,
+  .canvas-container {
+    touch-action: none;
+  }
+}

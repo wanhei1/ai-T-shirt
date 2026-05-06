@@ -1,5 +1,6 @@
 import type React from "react";
 import type { Metadata } from "next";
+import type { Viewport } from "next";
 // import { GeistSans } from "geist/font/sans"
 // import { GeistMono } from "geist/font/mono"
 import { Analytics } from "@vercel/analytics/next";
@@ -8,6 +9,13 @@ import { AuthProvider } from "@/contexts/auth-context";
 import { LanguageProvider } from "@/contexts/language-context";
 import { Navbar } from "@/components/navbar";
 import "./globals.css";
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 5,
+  userScalable: true,
+};
 
 export const metadata: Metadata = {
   title: "yituai - Design Your Perfect T-Shirt",
