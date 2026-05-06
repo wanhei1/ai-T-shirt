@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>yituai Database ER Diagram</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600;700&display=swap');
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { background:#020617; color:#e2e8f0; font-family:'JetBrains Mono',monospace; min-height:100vh; overflow:auto; }
+  .container { padding:32px 40px; }
+  h1 { font-size:22px; font-weight:700; color:#f1f5f9; margin-bottom:4px; }
+  .subtitle { font-size:12px; color:#64748b; margin-bottom:28px; }
+  .er-wrap { position:relative; }
+  svg.relationships { position:absolute; top:0; left:0; pointer-events:none; }
+  .tables-grid {
+    display:grid;
+    grid-template-columns:repeat(4, 220px);
+    gap:28px 30px;
+    position:relative;
+    z-index:2;
+  }
+  .tbl { width:220px; border-radius:8px; overflow:hidden; border:1px solid #1e293b; background:#0f172a; box-shadow:0 2px 12px rgba(0,0,0,.4); }
+  .tbl-head { height:24px; display:flex; align-items:center; justify-content:center; font-size:11px; font-weight:600; letter-spacing:.5px; color:#fff; }
+  .tbl-rows { padding:4px 0; }
+  .tbl-row { height:16px; display:flex; align-items:center; padding:0 8px; font-size:9.5px; gap:4px; }
+  .tbl-row .pk  { color:#fbbf24; font-weight:600; }
+  .tbl-row .fk  { color:#22d3ee; font-weight:500; }
+  .tbl-row .col { color:#cbd5e1; }
+  .tbl-row .type { margin-left:auto; color:#475569; font-size:8px; }
+  /* Category colors */
+  .cat-core .tbl-head    { background:linear-gradient(135deg,#1e3a5f,#0ea5e9); }
+  .cat-order .tbl-head   { background:linear-gradient(135deg,#4c1d95,#7c3aed); }
+  .cat-product .tbl-head { background:linear-gradient(135deg,#14532d,#22c55e); }
+  .cat-design .tbl-head  { background:linear-gradient(135deg,#78350f,#f59e0b); }
+  .cat-pay .tbl-head     { background:linear-gradient(135deg,#831843,#ec4899); }
+  .cat-util .tbl-head    { background:linear-gradient(135deg,#1e293b,#64748b); }
+  .legend { margin-top:24px; display:flex; gap:24px; font-size:10px; color:#94a3b8; }
+  .legend span { display:flex; align-items:center; gap:5px; }
+  .legend .dot { width:10px; height:10px; border-radius:50%; display:inline-block; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>🗄️ yituai Database ER Diagram</h1>
+  <p class="subtitle">PostgreSQL · 20 Tables · 220+ Columns · 79 Indexes</p>
+
+  <div class="legend">
+    <span><span class="dot" style="background:#fbbf24"></span> Primary Key</span>
+    <span><span class="dot" style="background:#22d3ee"></span> Foreign Key</span>
+    <span><span class="dot" style="background:#cbd5e1"></span> Regular Column</span>
+    <span style="color:#64748b">— → Relationship (1:N)</span>
+  </div>
+
+  <svg class="relationships" width="1040" height="1680" style="margin-top:16px;">
+    <defs>
+      <marker id="arrow" markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+        <path d="M0,0 L8,3 L0,6" fill="none" stroke="#64748b" stroke-width="1.2"/>
+      </marker>
+      <marker id="crow" markerWidth="10" markerHeight="8" refX="0" refY="4" orient="auto">
+        <path d="M10,0 L0,4 L10,8 M10,0 L0,4" fill="none" stroke="#64748b" stroke-width="1"/>
+      </marker>
+    </defs>
+    <!-- users → orders (1:N) -->
+    <line x1="250" y1="100" x2="262" y2="280" stroke="#64748b" stroke-width="1" marker-start="url(#crow)" marker-end="url(#arrow)"/>
+    <!-- users → memberships -->
+    <line x1="250" y1="130" x2="262" y2="480" stroke="#64748b" stroke-width="1" marker-start="url(#crow)" marker-end="url(#arrow)"/>
+    <!-- users → membership_transactions -->
+    <line x1="250" y1="150" x2="262" y2="680" stroke="#64748b" stroke-width="1" marker-start="url(#crow)" marker-end="url(#arrow)"/>
+    <!-- users → cart_items -->
+    <line x1="250" y1="170" x2="262" y2="870" stroke="#64748b" stroke-width="1" marker-start="url(#crow)" marker-end="url(#arrow)"/>
+    <!-- users → all_designs -->
+    <line x1="155" y1="220" x2="390" y2="30" stroke="#64748b" stroke-width="1" marker-start="url(#crow)" marker-end="url(#arrow)"/>
+    <!-- orders → shipments -->
+    <line x1="250" y1="420" x2="418" y2="870" stroke="#64748b" stroke-width="1" marker-start="url(#crow)" marker-end="url(#arrow)"/>
+    <!-- orders → after_sales_requests -->
+    <line x1="250" y1="440" x2="418" y2="1060" stroke="#64748b" stroke-width="1" marker-start="url(#crow)" marker-end="url(#arrow)"/>
+    <!-- orders → payment_events -->
+    <line x1="310" y1="460" x2="548" y2="30" stroke="#64748b" stroke-width="1" marker-start="url(#crow)" marker-end="url(#arrow)"/>
+    <!-- products → product_skus -->
+    <line x1="500" y1="220" x2="418" y2="680" stroke="#64748b" stroke-width="1" marker-start="url(#crow)" marker-end="url(#arrow)"/>
+    <!-- product_skus → orders -->
+    <line x1="418" y1="760" x2="250" y2="380" stroke="#64748b" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+    <!-- all_designs → orders -->
+    <line x1="390" y1="180" x2="250" y2="300" stroke="#64748b" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+    <!-- all_designs → cart_items -->
+    <line x1="500" y1="200" x2="370" y2="870" stroke="#64748b" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+    <!-- all_designs → design_usage_rewards -->
+    <line x1="500" y1="220" x2="680" y2="680" stroke="#64748b" stroke-width="1" marker-start="url(#crow)" marker-end="url(#arrow)"/>
+    <!-- users → referral_redemptions (inviter) -->
+    <line x1="250" y1="190" x2="668" y2="220" stroke="#64748b" stroke-width="1" marker-start="url(#crow)" marker-end="url(#arrow)"/>
+    <!-- users → referral_redemptions (invitee) -->
+    <line x1="250" y1="200" x2="668" y2="240" stroke="#64748b" stroke-width="1" stroke-dasharray="4,3" marker-end="url(#arrow)"/>
+  </svg>
+
+  <div class="tables-grid" style="margin-top:16px;">
+
+    <!-- ============ COL 1 ============ -->
+    <!-- users -->
+    <div class="tbl cat-core">
+      <div class="tbl-head">users</div>
+      <div class="tbl-rows">
+        <div class="tbl-row"><span class="pk">🔑 id</span><span class="type">BIGSERIAL PK</span></div>
+        <div class="tbl-row"><span class="col">username</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">email</span><span class="type">VARCHAR UNIQUE</span></div>
+        <div class="tbl-row"><span class="col">password</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">created_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">invite_code</span><span class="type">VARCHAR UNIQUE</span></div>
+        <div class="tbl-row"><span class="fk">→ invited_by_user_id</span><span class="type">FK→users</span></div>
+        <div class="tbl-row"><span class="col">invite_redeemed_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">is_admin</span><span class="type">BOOLEAN</span></div>
+      </div>
+    </div>
+
+    <!-- orders -->
+    <div class="tbl cat-order">
+      <div class="tbl-head">orders</div>
+      <div class="tbl-rows">
+        <div class="tbl-row"><span class="pk">🔑 id</span><span class="type">BIGSERIAL PK</span></div>
+        <div class="tbl-row"><span class="fk">→ user_id</span><span class="type">FK→users</span></div>
+        <div class="tbl-row"><span class="col">total</span><span class="type">NUMERIC</span></div>
+        <div class="tbl-row"><span class="col">status</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">payment_status</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">payment_channel</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">payment_order_id</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">paid_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">refund_status</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">refunded_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">items</span><span class="type">JSONB</span></div>
+        <div class="tbl-row"><span class="col">selections</span><span class="type">JSONB</span></div>
+        <div class="tbl-row"><span class="col">design</span><span class="type">JSONB</span></div>
+        <div class="tbl-row"><span class="col">shipping_info</span><span class="type">JSONB</span></div>
+        <div class="tbl-row"><span class="col">canvas_front</span><span class="type">TEXT</span></div>
+        <div class="tbl-row"><span class="col">canvas_back</span><span class="type">TEXT</span></div>
+        <div class="tbl-row"><span class="col">canvas_meta</span><span class="type">JSONB</span></div>
+        <div class="tbl-row"><span class="col">style</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">category</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="fk">→ source_all_id</span><span class="type">FK→all_designs</span></div>
+        <div class="tbl-row"><span class="col">address</span><span class="type">TEXT</span></div>
+        <div class="tbl-row"><span class="col">phone</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">order_time</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="fk">→ sku_id</span><span class="type">FK→product_skus</span></div>
+        <div class="tbl-row"><span class="col">sku_snapshot</span><span class="type">JSONB</span></div>
+        <div class="tbl-row"><span class="col">production_slot_date</span><span class="type">DATE</span></div>
+        <div class="tbl-row"><span class="col">created_at</span><span class="type">TIMESTAMPTZ</span></div>
+      </div>
+    </div>
+
+    <!-- memberships -->
+    <div class="tbl cat-core">
+      <div class="tbl-head">memberships</div>
+      <div class="tbl-rows">
+        <div class="tbl-row"><span class="pk">🔑 id</span><span class="type">BIGSERIAL PK</span></div>
+        <div class="tbl-row"><span class="fk">→ user_id</span><span class="type">FK→users UNIQUE</span></div>
+        <div class="tbl-row"><span class="col">plan_id</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">amount</span><span class="type">NUMERIC</span></div>
+        <div class="tbl-row"><span class="col">balance</span><span class="type">NUMERIC</span></div>
+        <div class="tbl-row"><span class="col">currency</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">status</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">transaction_id</span><span class="type">VARCHAR UNIQUE</span></div>
+        <div class="tbl-row"><span class="col">provider</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">started_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">expires_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">raw_payload</span><span class="type">JSONB</span></div>
+        <div class="tbl-row"><span class="col">created_at</span><span class="type">TIMESTAMPTZ</span></div>
+      </div>
+    </div>
+
+    <!-- membership_transactions -->
+    <div class="tbl cat-core">
+      <div class="tbl-head">membership_transactions</div>
+      <div class="tbl-rows">
+        <div class="tbl-row"><span class="pk">🔑 id</span><span class="type">BIGSERIAL PK</span></div>
+        <div class="tbl-row"><span class="fk">→ user_id</span><span class="type">FK→users</span></div>
+        <div class="tbl-row"><span class="col">delta</span><span class="type">NUMERIC</span></div>
+        <div class="tbl-row"><span class="col">balance_after</span><span class="type">NUMERIC</span></div>
+        <div class="tbl-row"><span class="col">currency</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">type</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">reference_id</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">raw_payload</span><span class="type">JSONB</span></div>
+        <div class="tbl-row"><span class="col">created_at</span><span class="type">TIMESTAMPTZ</span></div>
+      </div>
+    </div>
+
+    <!-- cart_items -->
+    <div class="tbl cat-order">
+      <div class="tbl-head">cart_items</div>
+      <div class="tbl-rows">
+        <div class="tbl-row"><span class="pk">🔑 id</span><span class="type">BIGSERIAL PK</span></div>
+        <div class="tbl-row"><span class="fk">→ user_id</span><span class="type">FK→users</span></div>
+        <div class="tbl-row"><span class="col">quantity</span><span class="type">INTEGER</span></div>
+        <div class="tbl-row"><span class="col">price</span><span class="type">NUMERIC</span></div>
+        <div class="tbl-row"><span class="col">category</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">items</span><span class="type">JSONB</span></div>
+        <div class="tbl-row"><span class="col">selections</span><span class="type">JSONB</span></div>
+        <div class="tbl-row"><span class="col">design</span><span class="type">JSONB</span></div>
+        <div class="tbl-row"><span class="col">canvas_front</span><span class="type">TEXT</span></div>
+        <div class="tbl-row"><span class="col">canvas_back</span><span class="type">TEXT</span></div>
+        <div class="tbl-row"><span class="col">canvas_meta</span><span class="type">JSONB</span></div>
+        <div class="tbl-row"><span class="fk">→ source_all_id</span><span class="type">FK→all_designs</span></div>
+        <div class="tbl-row"><span class="col">publish_to_all</span><span class="type">BOOLEAN</span></div>
+        <div class="tbl-row"><span class="col">created_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">updated_at</span><span class="type">TIMESTAMPTZ</span></div>
+      </div>
+    </div>
+
+    <!-- ============ COL 2 ============ -->
+    <!-- all_designs -->
+    <div class="tbl cat-design">
+      <div class="tbl-head">all_designs</div>
+      <div class="tbl-rows">
+        <div class="tbl-row"><span class="pk">🔑 id</span><span class="type">BIGSERIAL PK</span></div>
+        <div class="tbl-row"><span class="fk">→ user_id</span><span class="type">FK→users</span></div>
+        <div class="tbl-row"><span class="fk">→ source_order_id</span><span class="type">FK→orders</span></div>
+        <div class="tbl-row"><span class="col">category</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">selections</span><span class="type">JSONB</span></div>
+        <div class="tbl-row"><span class="col">design</span><span class="type">JSONB</span></div>
+        <div class="tbl-row"><span class="col">canvas_front</span><span class="type">TEXT</span></div>
+        <div class="tbl-row"><span class="col">canvas_back</span><span class="type">TEXT</span></div>
+        <div class="tbl-row"><span class="col">canvas_meta</span><span class="type">JSONB</span></div>
+        <div class="tbl-row"><span class="col">created_at</span><span class="type">TIMESTAMPTZ</span></div>
+      </div>
+    </div>
+
+    <!-- products -->
+    <div class="tbl cat-product">
+      <div class="tbl-head">products</div>
+      <div class="tbl-rows">
+        <div class="tbl-row"><span class="pk">🔑 id</span><span class="type">BIGSERIAL PK</span></div>
+        <div class="tbl-row"><span class="col">name</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">description</span><span class="type">TEXT</span></div>
+        <div class="tbl-row"><span class="col">base_price</span><span class="type">NUMERIC</span></div>
+        <div class="tbl-row"><span class="col">is_active</span><span class="type">BOOLEAN</span></div>
+        <div class="tbl-row"><span class="col">created_at</span><span class="type">TIMESTAMPTZ</span></div>
+      </div>
+    </div>
+
+    <!-- product_skus -->
+    <div class="tbl cat-product">
+      <div class="tbl-head">product_skus</div>
+      <div class="tbl-rows">
+        <div class="tbl-row"><span class="pk">🔑 id</span><span class="type">BIGSERIAL PK</span></div>
+        <div class="tbl-row"><span class="fk">→ product_id</span><span class="type">FK→products</span></div>
+        <div class="tbl-row"><span class="col">sku_code</span><span class="type">VARCHAR UNIQUE</span></div>
+        <div class="tbl-row"><span class="col">size</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">color</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">price</span><span class="type">NUMERIC</span></div>
+        <div class="tbl-row"><span class="col">sla_days</span><span class="type">INTEGER</span></div>
+        <div class="tbl-row"><span class="col">is_active</span><span class="type">BOOLEAN</span></div>
+        <div class="tbl-row"><span class="col">stock</span><span class="type">INTEGER</span></div>
+        <div class="tbl-row"><span class="col">created_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">updated_at</span><span class="type">TIMESTAMPTZ</span></div>
+      </div>
+    </div>
+
+    <!-- shipments -->
+    <div class="tbl cat-order">
+      <div class="tbl-head">shipments</div>
+      <div class="tbl-rows">
+        <div class="tbl-row"><span class="pk">🔑 id</span><span class="type">BIGSERIAL PK</span></div>
+        <div class="tbl-row"><span class="fk">→ order_id</span><span class="type">FK→orders UNIQUE</span></div>
+        <div class="tbl-row"><span class="col">carrier</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">tracking_no</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">status</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">shipped_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">delivered_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">created_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">updated_at</span><span class="type">TIMESTAMPTZ</span></div>
+      </div>
+    </div>
+
+    <!-- after_sales_requests -->
+    <div class="tbl cat-order">
+      <div class="tbl-head">after_sales_requests</div>
+      <div class="tbl-rows">
+        <div class="tbl-row"><span class="pk">🔑 id</span><span class="type">BIGSERIAL PK</span></div>
+        <div class="tbl-row"><span class="fk">→ order_id</span><span class="type">FK→orders</span></div>
+        <div class="tbl-row"><span class="fk">→ user_id</span><span class="type">FK→users</span></div>
+        <div class="tbl-row"><span class="col">type</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">reason</span><span class="type">TEXT</span></div>
+        <div class="tbl-row"><span class="col">status</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">refund_status</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">requested_amount</span><span class="type">NUMERIC</span></div>
+        <div class="tbl-row"><span class="col">refund_amount</span><span class="type">NUMERIC</span></div>
+        <div class="tbl-row"><span class="col">review_note</span><span class="type">TEXT</span></div>
+        <div class="tbl-row"><span class="col">admin_id</span><span class="type">BIGINT</span></div>
+        <div class="tbl-row"><span class="col">reviewed_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">completed_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">created_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">updated_at</span><span class="type">TIMESTAMPTZ</span></div>
+      </div>
+    </div>
+
+    <!-- ============ COL 3 ============ -->
+    <!-- payment_events -->
+    <div class="tbl cat-pay">
+      <div class="tbl-head">payment_events</div>
+      <div class="tbl-rows">
+        <div class="tbl-row"><span class="pk">🔑 id</span><span class="type">BIGSERIAL PK</span></div>
+        <div class="tbl-row"><span class="col">event_id</span><span class="type">VARCHAR UNIQUE</span></div>
+        <div class="tbl-row"><span class="col">order_id</span><span class="type">BIGINT</span></div>
+        <div class="tbl-row"><span class="col">payment_order_id</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">channel</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">status</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">amount</span><span class="type">NUMERIC</span></div>
+        <div class="tbl-row"><span class="col">received_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">raw_payload</span><span class="type">JSONB</span></div>
+        <div class="tbl-row"><span class="col">created_at</span><span class="type">TIMESTAMPTZ</span></div>
+      </div>
+    </div>
+
+    <!-- referral_redemptions -->
+    <div class="tbl cat-pay">
+      <div class="tbl-head">referral_redemptions</div>
+      <div class="tbl-rows">
+        <div class="tbl-row"><span class="pk">🔑 id</span><span class="type">BIGSERIAL PK</span></div>
+        <div class="tbl-row"><span class="fk">→ inviter_user_id</span><span class="type">FK→users</span></div>
+        <div class="tbl-row"><span class="fk">→ invitee_user_id</span><span class="type">FK→users</span></div>
+        <div class="tbl-row"><span class="col">invite_code</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">reward_amount</span><span class="type">NUMERIC</span></div>
+        <div class="tbl-row"><span class="col">created_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">processed_at</span><span class="type">TIMESTAMPTZ</span></div>
+      </div>
+    </div>
+
+    <!-- design_usage_rewards -->
+    <div class="tbl cat-design">
+      <div class="tbl-head">design_usage_rewards</div>
+      <div class="tbl-rows">
+        <div class="tbl-row"><span class="pk">🔑 id</span><span class="type">BIGSERIAL PK</span></div>
+        <div class="tbl-row"><span class="fk">→ source_all_id</span><span class="type">FK→all_designs</span></div>
+        <div class="tbl-row"><span class="fk">→ buyer_user_id</span><span class="type">FK→users</span></div>
+        <div class="tbl-row"><span class="fk">→ order_id</span><span class="type">FK→orders</span></div>
+        <div class="tbl-row"><span class="col">reward_amount</span><span class="type">NUMERIC</span></div>
+        <div class="tbl-row"><span class="col">created_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">processed_at</span><span class="type">TIMESTAMPTZ</span></div>
+      </div>
+    </div>
+
+    <!-- order_idempotency_keys -->
+    <div class="tbl cat-util">
+      <div class="tbl-head">order_idempotency_keys</div>
+      <div class="tbl-rows">
+        <div class="tbl-row"><span class="pk">🔑 id</span><span class="type">BIGSERIAL PK</span></div>
+        <div class="tbl-row"><span class="fk">→ user_id</span><span class="type">FK→users</span></div>
+        <div class="tbl-row"><span class="col">endpoint</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">idempotency_key</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">request_hash</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">response_body</span><span class="type">JSONB</span></div>
+        <div class="tbl-row"><span class="col">order_id</span><span class="type">BIGINT</span></div>
+        <div class="tbl-row"><span class="col">created_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">expires_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">processed_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">replayed_at</span><span class="type">TIMESTAMPTZ</span></div>
+      </div>
+    </div>
+
+    <!-- ai_budget_daily_counters -->
+    <div class="tbl cat-util">
+      <div class="tbl-head">ai_budget_daily_counters</div>
+      <div class="tbl-rows">
+        <div class="tbl-row"><span class="pk">🔑 id</span><span class="type">BIGSERIAL PK</span></div>
+        <div class="tbl-row"><span class="col">usage_date</span><span class="type">DATE</span></div>
+        <div class="tbl-row"><span class="col">operation</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">scope</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">user_key</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">quota</span><span class="type">INTEGER</span></div>
+        <div class="tbl-row"><span class="col">used</span><span class="type">INTEGER</span></div>
+        <div class="tbl-row"><span class="col">updated_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">created_at</span><span class="type">TIMESTAMPTZ</span></div>
+      </div>
+    </div>
+
+    <!-- ============ COL 4 ============ -->
+    <!-- production_capacity_daily -->
+    <div class="tbl cat-util">
+      <div class="tbl-head">production_capacity_daily</div>
+      <div class="tbl-rows">
+        <div class="tbl-row"><span class="pk">🔑 id</span><span class="type">BIGSERIAL PK</span></div>
+        <div class="tbl-row"><span class="col">capacity_date</span><span class="type">DATE UNIQUE</span></div>
+        <div class="tbl-row"><span class="col">total_slots</span><span class="type">INTEGER</span></div>
+        <div class="tbl-row"><span class="col">used_slots</span><span class="type">INTEGER</span></div>
+        <div class="tbl-row"><span class="col">updated_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">created_at</span><span class="type">TIMESTAMPTZ</span></div>
+      </div>
+    </div>
+
+    <!-- orders_archive -->
+    <div class="tbl cat-order">
+      <div class="tbl-head">orders_archive</div>
+      <div class="tbl-rows">
+        <div class="tbl-row"><span class="pk">🔑 id</span><span class="type">BIGSERIAL PK</span></div>
+        <div class="tbl-row"><span class="fk">→ user_id</span><span class="type">FK→users</span></div>
+        <div class="tbl-row"><span class="col">total</span><span class="type">NUMERIC</span></div>
+        <div class="tbl-row"><span class="col">status</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">payment_status</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">items</span><span class="type">JSONB</span></div>
+        <div class="tbl-row"><span class="col">design</span><span class="type">JSONB</span></div>
+        <div class="tbl-row"><span class="col">canvas_front</span><span class="type">TEXT</span></div>
+        <div class="tbl-row"><span class="col">canvas_back</span><span class="type">TEXT</span></div>
+        <div class="tbl-row"><span class="col">canvas_meta</span><span class="type">JSONB</span></div>
+        <div class="tbl-row"><span class="col">style</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">category</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">address</span><span class="type">TEXT</span></div>
+        <div class="tbl-row"><span class="col">phone</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">order_time</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">created_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">archived_at</span><span class="type">TIMESTAMPTZ</span></div>
+      </div>
+    </div>
+
+    <!-- design_snapshots -->
+    <div class="tbl cat-design">
+      <div class="tbl-head">design_snapshots</div>
+      <div class="tbl-rows">
+        <div class="tbl-row"><span class="pk">🔑 id</span><span class="type">BIGSERIAL PK</span></div>
+        <div class="tbl-row"><span class="col">design_id</span><span class="type">BIGINT</span></div>
+        <div class="tbl-row"><span class="col">version</span><span class="type">INTEGER</span></div>
+        <div class="tbl-row"><span class="col">design</span><span class="type">JSONB</span></div>
+        <div class="tbl-row"><span class="col">canvas_front</span><span class="type">TEXT</span></div>
+        <div class="tbl-row"><span class="col">canvas_back</span><span class="type">TEXT</span></div>
+        <div class="tbl-row"><span class="col">canvas_meta</span><span class="type">JSONB</span></div>
+        <div class="tbl-row"><span class="col">created_by</span><span class="type">BIGINT</span></div>
+        <div class="tbl-row"><span class="col">created_at</span><span class="type">TIMESTAMPTZ</span></div>
+      </div>
+    </div>
+
+    <!-- global_designs -->
+    <div class="tbl cat-design">
+      <div class="tbl-head">global_designs</div>
+      <div class="tbl-rows">
+        <div class="tbl-row"><span class="pk">🔑 id</span><span class="type">BIGSERIAL PK</span></div>
+        <div class="tbl-row"><span class="col">name</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">category</span><span class="type">VARCHAR</span></div>
+        <div class="tbl-row"><span class="col">design</span><span class="type">JSONB</span></div>
+        <div class="tbl-row"><span class="col">canvas_front</span><span class="type">TEXT</span></div>
+        <div class="tbl-row"><span class="col">canvas_back</span><span class="type">TEXT</span></div>
+        <div class="tbl-row"><span class="col">canvas_meta</span><span class="type">JSONB</span></div>
+        <div class="tbl-row"><span class="col">is_active</span><span class="type">BOOLEAN</span></div>
+        <div class="tbl-row"><span class="col">created_at</span><span class="type">TIMESTAMPTZ</span></div>
+      </div>
+    </div>
+
+    <!-- schema_migrations -->
+    <div class="tbl cat-util">
+      <div class="tbl-head">schema_migrations</div>
+      <div class="tbl-rows">
+        <div class="tbl-row"><span class="pk">🔑 id</span><span class="type">BIGSERIAL PK</span></div>
+        <div class="tbl-row"><span class="col">version</span><span class="type">BIGINT</span></div>
+        <div class="tbl-row"><span class="col">applied_at</span><span class="type">TIMESTAMPTZ</span></div>
+        <div class="tbl-row"><span class="col">description</span><span class="type">TEXT</span></div>
+      </div>
+    </div>
+
+  </div><!-- /tables-grid -->
+</div><!-- /container -->
+</body>
+</html>

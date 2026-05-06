@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>yituai Sequence Diagrams</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #020617;
+      color: #e2e8f0;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      padding: 2rem;
+      min-height: 100vh;
+    }
+    h1 {
+      text-align: center;
+      font-size: 1.5rem;
+      color: #f1f5f9;
+      margin-bottom: 2rem;
+    }
+    .diagram-card {
+      background: rgba(15,23,42,0.5);
+      border: 1px solid #1e293b;
+      border-radius: 12px;
+      padding: 1.5rem;
+      margin-bottom: 2rem;
+      max-width: 960px;
+      margin-left: auto;
+      margin-right: auto;
+    }
+    .diagram-card h2 {
+      color: #22d3ee;
+      font-size: 1.1rem;
+      margin-bottom: 1rem;
+    }
+    footer {
+      text-align: center;
+      color: #475569;
+      font-size: 0.85rem;
+      margin-top: 3rem;
+    }
+  </style>
+</head>
+<body>
+
+<h1>yituai Sequence Diagrams</h1>
+
+<div class="diagram-card">
+  <h2>1. 用户下单流程</h2>
+  <div class="mermaid">
+sequenceDiagram
+    participant U as 用户浏览器
+    participant N as Next.js :3000
+    participant A as Express API :8189
+    participant DB as PostgreSQL
+    participant R as Redis
+    
+    U->>N: GET /design/preview
+    N->>A: SSR: GET /api/orders/summary
+    A->>DB: SELECT orders (no base64)
+    DB-->>A: orders[]
+    A-->>N: {orders}
+    N-->>U: 页面渲染
+    
+    U->>N: 点击"下单"
+    N->>A: POST /api/orders (JWT + Idempotency-Key)
+    A->>A: verify JWT + check membership
+    A->>DB: BEGIN
+    A->>DB: INSERT INTO orders
+    A->>DB: UPDATE memberships SET balance
+    A->>DB: INSERT INTO payment_events
+    A->>DB: COMMIT
+    A-->>N: {order}
+    N-->>U: 展示支付宝二维码
+    
+    U->>U: 扫码支付
+    U->>N: 点击"我已支付"
+    N->>A: POST /api/payments/create-intent
+    A->>DB: UPDATE orders SET payment_status
+    A-->>N: {orderId}
+    N->>N: router.push(/profile)
+  </div>
+</div>
+
+<div class="diagram-card">
+  <h2>2. AI 生图流程</h2>
+  <div class="mermaid">
+sequenceDiagram
+    participant U as 用户浏览器
+    participant A as Express API
+    participant Q as RabbitMQ
+    participant W as Worker
+    participant C as ComfyUI :8188
+    participant R as Redis
+    
+    U->>A: POST /api/generate (prompt, style)
+    A->>A: 校验会员 + AI预算 + 产能
+    A->>Q: enqueue ai-image job
+    A-->>U: {jobId}
+    
+    loop 轮询
+        U->>A: GET /api/jobs/ai-image/:id
+        A->>R: GET job state
+        R-->>A: {state: processing, progress: 30%}
+        A-->>U: {job}
+    end
+    
+    Q->>W: consume job
+    W->>W: 构建 prompt + style config
+    W->>C: POST /prompt (workflow JSON)
+    C-->>W: {prompt_id}
+    loop 轮询
+        W->>C: GET /history/:prompt_id
+        C-->>W: {outputs: [image]}
+    end
+    W->>W: 下载生成图片
+    W->>R: SET job result
+    W->>Q: ack
+    
+    U->>A: GET /api/jobs/ai-image/:id
+    A->>R: GET job state
+    R-->>A: {state: completed, result: url}
+    A-->>U: {job}
+    U->>U: 显示生成图片
+  </div>
+</div>
+
+<div class="diagram-card">
+  <h2>3. 虚拟试穿流程</h2>
+  <div class="mermaid">
+sequenceDiagram
+    participant U as 用户浏览器
+    participant A as Express API
+    participant Q as RabbitMQ
+    participant W as Worker
+    participant CV as CatVTON Pipeline
+    participant R as Redis
+    
+    U->>A: POST /api/jobs (type: virtual-tryon)
+    A->>A: 校验会员预算 + 产能
+    A->>Q: enqueue virtual-tryon job
+    A-->>U: {jobId}
+    
+    Q->>W: consume job
+    W->>W: 加载人物图 + 服装图
+    W->>CV: AutoMasker → 生成 mask
+    CV-->>W: mask
+    W->>CV: CatVTON inference (person + cloth + mask)
+    CV-->>W: 试穿结果图
+    W->>W: 保存结果
+    W->>R: SET job result
+    W->>Q: ack
+    
+    loop 轮询
+        U->>A: GET /api/jobs/virtual-tryon/:id
+        A->>R: GET job state
+        A-->>U: {job}
+    end
+    U->>U: 显示试穿效果
+  </div>
+</div>
+
+<footer>Audited 2026-05-06</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+mermaid.initialize({
+  startOnLoad: true,
+  theme: 'dark',
+  themeVariables: {
+    primaryColor: '#1e293b',
+    primaryTextColor: '#e2e8f0',
+    primaryBorderColor: '#334155',
+    lineColor: '#64748b',
+    secondaryColor: '#0f172a',
+    tertiaryColor: '#1e293b'
+  }
+});
+</script>
+</body>
+</html>

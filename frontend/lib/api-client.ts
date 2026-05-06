@@ -512,14 +512,12 @@ class ApiClient {
   }
 
   getThumbnailUrl(orderId: number | string): string {
-    // Pick the first URL that isn't localhost/127.0.0.1 (unreachable from mobile browsers)
-    const publicUrl = envApiUrls.find(u => !u.includes('localhost') && !u.includes('127.0.0.1')) || envApiUrls[0] || 'http://localhost:8189';
-    return `${publicUrl}/api/orders/${orderId}/thumbnail`;
+    // Use Next.js /backend/ proxy so mobile browsers don't need direct access to port 8189
+    return `/backend/api/orders/${orderId}/thumbnail`;
   }
 
   getGalleryThumbnailUrl(designId: number | string): string {
-    const publicUrl = envApiUrls.find(u => !u.includes('localhost') && !u.includes('127.0.0.1')) || envApiUrls[0] || 'http://localhost:8189';
-    return `${publicUrl}/api/gallery/${designId}/thumbnail`;
+    return `/backend/api/gallery/${designId}/thumbnail`;
   }
 
   async createPaymentIntent(payload: { orderId: number; channel: 'alipay'; amount: number }) {

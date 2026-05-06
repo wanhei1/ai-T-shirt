@@ -1116,6 +1116,9 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
                 return sendError(res, 400, 'INVALID_REQUEST', 'Missing try-on inputs');
             }
 
+            // ✅ 安全修复：虚拟试穿也必须登录
+            if (!req.userId) return sendError(res, 401, 'UNAUTHORIZED', 'User ID not found');
+
             const tryonIpLimit = Math.max(1, Number.parseInt(process.env.TRYON_RATE_LIMIT_IP_PER_MIN || '30', 10));
             const tryonUserLimit = Math.max(1, Number.parseInt(process.env.TRYON_RATE_LIMIT_USER_PER_MIN || '10', 10));
             const allowedByRate = await assertRateLimit(req, res, {
@@ -1156,7 +1159,8 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
         }
     });
 
-    router.get('/jobs/:queue/stats', authenticateOptional, async (req, res) => {
+    // ✅ 安全修复：队列统计需要登录
+    router.get('/jobs/:queue/stats', authenticate, async (req, res) => {
         try {
             const queue = getQueueByName(req.params.queue);
             if (!queue) {
@@ -1170,7 +1174,8 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
         }
     });
 
-    router.get('/jobs/:queue/:id', authenticateOptional, async (req, res) => {
+    // ✅ 安全修复：任务状态查询需要登录（内部已有权限校验）
+    router.get('/jobs/:queue/:id', authenticate, async (req, res) => {
         try {
             res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
             res.setHeader('Pragma', 'no-cache');

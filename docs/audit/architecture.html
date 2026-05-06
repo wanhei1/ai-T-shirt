@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>yituai System Architecture</title>
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #020617; display: flex; justify-content: center; align-items: center; min-height: 100vh; }
+  svg { font-family: 'JetBrains Mono', monospace; }
+</style>
+</head>
+<body>
+<svg width="1000" height="800" viewBox="0 0 1000 800" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#0f172a" stroke-width="0.5"/>
+    </pattern>
+    <marker id="arrow-frontend" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#22d3ee"/>
+    </marker>
+    <marker id="arrow-backend" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#34d399"/>
+    </marker>
+    <marker id="arrow-ext" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#94a3b8"/>
+    </marker>
+    <marker id="arrow-queue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#fb923c"/>
+    </marker>
+    <marker id="arrow-db" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#a78bfa"/>
+    </marker>
+    <marker id="arrow-security" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#fb7185"/>
+    </marker>
+  </defs>
+
+  <!-- Grid background -->
+  <rect width="1000" height="800" fill="#020617"/>
+  <rect width="1000" height="800" fill="url(#grid)"/>
+
+  <!-- ==================== LEFT COLUMN: Users ==================== -->
+  <!-- Users/Browser -->
+  <g>
+    <rect x="30" y="260" width="110" height="40" rx="4" fill="none" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6 3"/>
+    <rect x="34" y="264" width="102" height="32" rx="3" fill="#0f172a" stroke="#94a3b8" stroke-width="1"/>
+    <text x="85" y="281" text-anchor="middle" fill="#94a3b8" font-size="10" font-weight="700">Users/Browser</text>
+    <text x="85" y="293" text-anchor="middle" fill="#475569" font-size="8">HTTPS</text>
+  </g>
+
+  <!-- Mobile via FRP -->
+  <g>
+    <rect x="30" y="340" width="110" height="40" rx="4" fill="none" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6 3"/>
+    <rect x="34" y="344" width="102" height="32" rx="3" fill="#0f172a" stroke="#94a3b8" stroke-width="1"/>
+    <text x="85" y="361" text-anchor="middle" fill="#94a3b8" font-size="10" font-weight="700">Mobile (FRP)</text>
+    <text x="85" y="373" text-anchor="middle" fill="#475569" font-size="8">:8478</text>
+  </g>
+
+  <!-- ==================== CENTER-LEFT: FRP & Next.js ==================== -->
+  <!-- FRP Proxy -->
+  <g>
+    <rect x="180" y="180" width="100" height="40" rx="4" fill="none" stroke="#94a3b8" stroke-width="2" stroke-dasharray="6 3"/>
+    <rect x="184" y="184" width="92" height="32" rx="3" fill="#0f172a" stroke="#94a3b8" stroke-width="1"/>
+    <text x="230" y="201" text-anchor="middle" fill="#94a3b8" font-size="10" font-weight="700">FRP Proxy</text>
+    <text x="230" y="213" text-anchor="middle" fill="#475569" font-size="8">HTTPS→TCP</text>
+  </g>
+
+  <!-- Next.js Frontend -->
+  <g>
+    <rect x="180" y="270" width="140" height="60" rx="4" fill="none" stroke="#22d3ee" stroke-width="2" stroke-dasharray="6 3"/>
+    <rect x="184" y="274" width="132" height="52" rx="3" fill="#0c2a35" stroke="#22d3ee" stroke-width="1"/>
+    <text x="250" y="292" text-anchor="middle" fill="#22d3ee" font-size="11" font-weight="700">Next.js Frontend</text>
+    <text x="250" y="305" text-anchor="middle" fill="#0e7490" font-size="8">:3000</text>
+    <text x="250" y="317" text-anchor="middle" fill="#164e63" font-size="7">SSR + /backend/ proxy</text>
+  </g>
+
+  <!-- Admin Dashboard -->
+  <g>
+    <rect x="180" y="400" width="140" height="40" rx="4" fill="none" stroke="#22d3ee" stroke-width="2" stroke-dasharray="6 3"/>
+    <rect x="184" y="404" width="132" height="32" rx="3" fill="#0c2a35" stroke="#22d3ee" stroke-width="1"/>
+    <text x="250" y="421" text-anchor="middle" fill="#22d3ee" font-size="10" font-weight="700">Admin Dashboard</text>
+    <text x="250" y="433" text-anchor="middle" fill="#0e7490" font-size="8">/admin</text>
+  </g>
+
+  <!-- ==================== CENTER: Express API ==================== -->
+  <!-- Rate Limiter -->
+  <g>
+    <rect x="400" y="130" width="100" height="30" rx="4" fill="none" stroke="#fb7185" stroke-width="2" stroke-dasharray="6 3"/>
+    <rect x="404" y="134" width="92" height="22" rx="3" fill="#2a0f14" stroke="#fb7185" stroke-width="1"/>
+    <text x="450" y="150" text-anchor="middle" fill="#fb7185" font-size="9" font-weight="700">Rate Limiter</text>
+  </g>
+
+  <!-- Auth Middleware -->
+  <g>
+    <rect x="400" y="180" width="100" height="30" rx="4" fill="none" stroke="#fb7185" stroke-width="2" stroke-dasharray="6 3"/>
+    <rect x="404" y="184" width="92" height="22" rx="3" fill="#2a0f14" stroke="#fb7185" stroke-width="1"/>
+    <text x="450" y="196" text-anchor="middle" fill="#fb7185" font-size="9" font-weight="700">Auth Middleware</text>
+  </g>
+
+  <!-- Express API -->
+  <g>
+    <rect x="390" y="270" width="160" height="60" rx="4" fill="none" stroke="#34d399" stroke-width="2" stroke-dasharray="6 3"/>
+    <rect x="394" y="274" width="152" height="52" rx="3" fill="#0a2518" stroke="#34d399" stroke-width="1"/>
+    <text x="470" y="293" text-anchor="middle" fill="#34d399" font-size="11" font-weight="700">Express API</text>
+    <text x="470" y="306" text-anchor="middle" fill="#059669" font-size="8">:8189</text>
+    <text x="470" y="318" text-anchor="middle" fill="#064e3b" font-size="7">48 routes · JWT auth</text>
+  </g>
+
+  <!-- ==================== CENTER-RIGHT: Data Stores ==================== -->
+  <!-- PostgreSQL -->
+  <g>
+    <rect x="650" y="170" width="120" height="65" rx="4" fill="none" stroke="#a78bfa" stroke-width="2" stroke-dasharray="6 3"/>
+    <rect x="654" y="174" width="112" height="57" rx="3" fill="#150e2e" stroke="#a78bfa" stroke-width="1"/>
+    <text x="710" y="193" text-anchor="middle" fill="#a78bfa" font-size="11" font-weight="700">PostgreSQL</text>
+    <text x="710" y="206" text-anchor="middle" fill="#7c3aed" font-size="8">:5432</text>
+    <text x="710" y="218" text-anchor="middle" fill="#3b0764" font-size="7">20 tables · 79 indexes</text>
+  </g>
+
+  <!-- Redis -->
+  <g>
+    <rect x="650" y="320" width="120" height="55" rx="4" fill="none" stroke="#a78bfa" stroke-width="2" stroke-dasharray="6 3"/>
+    <rect x="654" y="324" width="112" height="47" rx="3" fill="#150e2e" stroke="#a78bfa" stroke-width="1"/>
+    <text x="710" y="343" text-anchor="middle" fill="#a78bfa" font-size="11" font-weight="700">Redis</text>
+    <text x="710" y="356" text-anchor="middle" fill="#7c3aed" font-size="8">:6379</text>
+    <text x="710" y="366" text-anchor="middle" fill="#3b0764" font-size="7">Cache + Job State</text>
+  </g>
+
+  <!-- RabbitMQ -->
+  <g>
+    <rect x="645" y="470" width="130" height="55" rx="4" fill="none" stroke="#fb923c" stroke-width="2" stroke-dasharray="6 3"/>
+    <rect x="649" y="474" width="122" height="47" rx="3" fill="#1c0e04" stroke="#fb923c" stroke-width="1"/>
+    <text x="710" y="493" text-anchor="middle" fill="#fb923c" font-size="11" font-weight="700">RabbitMQ</text>
+    <text x="710" y="506" text-anchor="middle" fill="#ea580c" font-size="8">:5672</text>
+    <text x="710" y="516" text-anchor="middle" fill="#7c2d12" font-size="7">ai-image · virtual-tryon</text>
+  </g>
+
+  <!-- ==================== RIGHT: AI Services ==================== -->
+  <!-- ComfyUI -->
+  <g>
+    <rect x="850" y="175" width="120" height="55" rx="4" fill="none" stroke="#34d399" stroke-width="2" stroke-dasharray="6 3"/>
+    <rect x="854" y="179" width="112" height="47" rx="3" fill="#0a2518" stroke="#34d399" stroke-width="1"/>
+    <text x="910" y="196" text-anchor="middle" fill="#34d399" font-size="10" font-weight="700">ComfyUI</text>
+    <text x="910" y="208" text-anchor="middle" fill="#059669" font-size="8">:8188</text>
+    <text x="910" y="220" text-anchor="middle" fill="#064e3b" font-size="7">Juggernaut-XL</text>
+  </g>
+
+  <!-- CatVTON -->
+  <g>
+    <rect x="850" y="320" width="120" height="50" rx="4" fill="none" stroke="#34d399" stroke-width="2" stroke-dasharray="6 3"/>
+    <rect x="854" y="324" width="112" height="42" rx="3" fill="#0a2518" stroke="#34d399" stroke-width="1"/>
+    <text x="910" y="343" text-anchor="middle" fill="#34d399" font-size="10" font-weight="700">CatVTON</text>
+    <text x="910" y="360" text-anchor="middle" fill="#064e3b" font-size="7">Virtual Try-on</text>
+  </g>
+
+  <!-- Worker Process -->
+  <g>
+    <rect x="640" y="600" width="150" height="45" rx="4" fill="none" stroke="#34d399" stroke-width="2" stroke-dasharray="6 3"/>
+    <rect x="644" y="604" width="142" height="37" rx="3" fill="#0a2518" stroke="#34d399" stroke-width="1"/>
+    <text x="715" y="620" text-anchor="middle" fill="#34d399" font-size="10" font-weight="700">Worker Process</text>
+    <text x="715" y="635" text-anchor="middle" fill="#064e3b" font-size="7">PM2 · consumes RabbitMQ</text>
+  </g>
+
+  <!-- ==================== ARROWS ==================== -->
+  <!-- Users → FRP -->
+  <line x1="140" y1="280" x2="178" y2="200" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow-ext)"/>
+  <text x="155" y="232" fill="#475569" font-size="7" transform="rotate(-30,155,232)">HTTPS</text>
+
+  <!-- Mobile → FRP -->
+  <line x1="140" y1="360" x2="178" y2="210" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#arrow-ext)"/>
+
+  <!-- FRP → Next.js -->
+  <line x1="230" y1="220" x2="230" y2="268" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrow-frontend)"/>
+  <text x="235" y="245" fill="#0e7490" font-size="7">:3000</text>
+
+  <!-- Next.js → Express API (proxy) -->
+  <line x1="320" y1="300" x2="388" y2="300" stroke="#22d3ee" stroke-width="1.5" marker-end="url(#arrow-frontend)"/>
+  <text x="350" y="293" fill="#0e7490" font-size="7">/backend/</text>
+
+  <!-- Next.js → Express API (client direct) -->
+  <line x1="320" y1="315" x2="388" y2="315" stroke="#22d3ee" stroke-width="1" stroke-dasharray="4 2" marker-end="url(#arrow-frontend)"/>
+  <text x="350" y="327" fill="#0e7490" font-size="7">client JS</text>
+
+  <!-- Express → Auth -->
+  <line x1="450" y1="270" x2="450" y2="212" stroke="#fb7185" stroke-width="1" marker-end="url(#arrow-security)"/>
+
+  <!-- Auth → Rate Limiter -->
+  <line x1="450" y1="162" x2="450" y2="180" stroke="#fb7185" stroke-width="1" marker-end="url(#arrow-security)"/>
+
+  <!-- Express → PostgreSQL -->
+  <line x1="550" y1="290" x2="648" y2="220" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-db)"/>
+  <text x="595" y="245" fill="#7c3aed" font-size="7">SQL</text>
+
+  <!-- Express → Redis -->
+  <line x1="550" y1="305" x2="648" y2="340" stroke="#a78bfa" stroke-width="1.5" marker-end="url(#arrow-db)"/>
+  <text x="595" y="328" fill="#7c3aed" font-size="7">cache</text>
+
+  <!-- Express → RabbitMQ -->
+  <line x1="530" y1="330" x2="643" y2="480" stroke="#fb923c" stroke-width="1.5" marker-end="url(#arrow-queue)"/>
+  <text x="580" y="405" fill="#ea580c" font-size="7">enqueue</text>
+
+  <!-- Worker → RabbitMQ -->
+  <line x1="715" y1="600" x2="715" y2="527" stroke="#fb923c" stroke-width="1.5" marker-end="url(#arrow-queue)"/>
+  <text x="725" y="565" fill="#ea580c" font-size="7">consume</text>
+
+  <!-- Worker → ComfyUI -->
+  <line x1="790" y1="605" x2="910" y2="232" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-backend)"/>
+  <text x="860" y="410" fill="#059669" font-size="7" transform="rotate(-70,860,410)">HTTP</text>
+
+  <!-- Worker → CatVTON -->
+  <line x1="790" y1="615" x2="908" y2="372" stroke="#34d399" stroke-width="1.5" marker-end="url(#arrow-backend)"/>
+  <text x="855" y="500" fill="#059669" font-size="7" transform="rotate(-55,855,500)">pipeline</text>
+
+  <!-- Worker → Redis -->
+  <line x1="640" y1="620" x2="640" y2="630" stroke="#a78bfa" stroke-width="1" stroke-dasharray="3 2"/>
+  <line x1="640" y1="630" x2="640" y2="375" stroke="#a78bfa" stroke-width="1" marker-end="url(#arrow-db)"/>
+  <text x="600" y="500" fill="#7c3aed" font-size="7">write result</text>
+
+  <!-- ==================== LEGEND ==================== -->
+  <g transform="translate(700,700)">
+    <rect x="0" y="0" width="280" height="85" rx="4" fill="#0f172a" stroke="#1e293b" stroke-width="1"/>
+    <text x="140" y="16" text-anchor="middle" fill="#94a3b8" font-size="9" font-weight="700">LEGEND</text>
+
+    <rect x="10" y="24" width="20" height="10" rx="2" fill="#0c2a35" stroke="#22d3ee" stroke-width="1"/>
+    <text x="36" y="33" fill="#22d3ee" font-size="8">Frontend</text>
+
+    <rect x="100" y="24" width="20" height="10" rx="2" fill="#0a2518" stroke="#34d399" stroke-width="1"/>
+    <text x="126" y="33" fill="#34d399" font-size="8">Backend</text>
+
+    <rect x="190" y="24" width="20" height="10" rx="2" fill="#150e2e" stroke="#a78bfa" stroke-width="1"/>
+    <text x="216" y="33" fill="#a78bfa" font-size="8">Database</text>
+
+    <rect x="10" y="44" width="20" height="10" rx="2" fill="#1c0e04" stroke="#fb923c" stroke-width="1"/>
+    <text x="36" y="53" fill="#fb923c" font-size="8">Queue</text>
+
+    <rect x="100" y="44" width="20" height="10" rx="2" fill="#0f172a" stroke="#94a3b8" stroke-width="1" stroke-dasharray="4 2"/>
+    <text x="126" y="53" fill="#94a3b8" font-size="8">External</text>
+
+    <rect x="190" y="44" width="20" height="10" rx="2" fill="#2a0f14" stroke="#fb7185" stroke-width="1"/>
+    <text x="216" y="53" fill="#fb7185" font-size="8">Security</text>
+
+    <line x1="10" y1="70" x2="30" y2="70" stroke="#22d3ee" stroke-width="1.5"/>
+    <text x="36" y="73" fill="#475569" font-size="7">solid = sync</text>
+    <line x1="110" y1="70" x2="130" y2="70" stroke="#22d3ee" stroke-width="1" stroke-dasharray="4 2"/>
+    <text x="136" y="73" fill="#475569" font-size="7">dashed = async</text>
+  </g>
+
+  <!-- Footer -->
+  <text x="500" y="785" text-anchor="middle" fill="#334155" font-size="10" font-weight="700">yituai System Architecture • Audited 2026-05-06</text>
+</svg>
+</body>
+</html>

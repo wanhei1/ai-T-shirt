@@ -68,8 +68,15 @@ export function ImageUploader({ onImageUploaded }: ImageUploaderProps) {
         setUploadProgress((prev) => Math.min(prev + 10, 90))
       }, 100)
 
+      const token = typeof window !== "undefined"
+        ? (localStorage.getItem("authToken") || localStorage.getItem("token"))
+        : null;
+
       const response = await fetch("/api/upload-image", {
         method: "POST",
+        headers: {
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: formData,
       })
 
