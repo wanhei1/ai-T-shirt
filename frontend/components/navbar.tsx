@@ -5,6 +5,7 @@ import { useAuth } from "@/contexts/auth-context";
 import { Button } from "@/components/ui/button";
 import { LogOut, ShoppingCart, User } from "lucide-react";
 import { useLanguage } from "@/contexts/language-context";
+import { MobileNav } from "@/components/mobile-nav";
 
 export function Navbar() {
   const { user, logout } = useAuth();
@@ -14,43 +15,36 @@ export function Navbar() {
     <nav className="border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container mx-auto px-4">
         <div className="flex h-14 items-center justify-between">
-          <div className="flex items-center space-x-4">
+          {/* Left: Logo + Mobile Menu */}
+          <div className="flex items-center space-x-2">
+            <MobileNav />
             <Link href="/" className="text-xl font-bold">
               {translate({ zh: "yituai", en: "yituai" })}
             </Link>
           </div>
 
-          <div className="flex items-center space-x-4">
+          {/* Right: Desktop Nav */}
+          <div className="hidden md:flex items-center space-x-4">
             <Button
               variant="outline"
-              size="sm"
+              size="default"
               onClick={toggleLanguage}
-              className="hidden sm:inline-flex"
             >
               {language === "zh" ? "English" : "中文"}
             </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={toggleLanguage}
-              className="sm:hidden"
-            >
-              {language === "zh" ? "EN" : "中"}
-            </Button>
             {user ? (
-              <div className="flex items-center space-x-4">
-                <span className="text-sm text-muted-foreground">
+              <div className="flex items-center space-x-2">
+                <span className="text-sm text-muted-foreground truncate max-w-[120px]">
                   {translate({
                     zh: `欢迎, ${user.username}`,
                     en: `Welcome, ${user.username}`,
                   })}
                 </span>
 
-                {/* 简化的链接按钮 */}
                 <Link href="/cart">
                   <Button
                     variant="ghost"
-                    size="sm"
+                    size="default"
                     className="flex items-center gap-2"
                   >
                     <ShoppingCart className="h-4 w-4" />
@@ -61,7 +55,7 @@ export function Navbar() {
                 <Link href="/profile">
                   <Button
                     variant="ghost"
-                    size="sm"
+                    size="default"
                     className="flex items-center gap-2"
                   >
                     <User className="h-4 w-4" />
@@ -71,7 +65,7 @@ export function Navbar() {
 
                 <Button
                   variant="ghost"
-                  size="sm"
+                  size="default"
                   onClick={logout}
                   className="flex items-center gap-2"
                 >
