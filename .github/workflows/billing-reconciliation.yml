@@ -1,9 +1,7 @@
 name: Billing Reconciliation
 
-"on":
+on:
   workflow_dispatch:
-  schedule:
-    - cron: '20 2 * * *'
 
 jobs:
   daily-billing-reconciliation:

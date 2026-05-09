@@ -2,8 +2,6 @@ name: DR Readiness
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 2 * * 1'
 
 jobs:
   dr-readiness-gate:
