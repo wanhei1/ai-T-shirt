@@ -3216,20 +3216,71 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
         }
     });
 
+    // Admin: get any order's thumbnail (no user_id check)
+    router.get('/admin/orders/:id/thumbnail', authenticate, async (req, res) => {
+        try {
+            const adminUser = await requireAdmin(req, res);
+            if (!adminUser) return;
+
+            const orderId = Number(req.params.id);
+            if (!Number.isFinite(orderId) || orderId <= 0) {
+                return res.status(400).json({ message: 'Invalid order ID' });
+            }
+            const result = await pool.query('SELECT canvas_front FROM orders WHERE id = $1', [orderId]);
+            const thumb = result.rows[0]?.canvas_front || null;
+            if (!thumb) {
+                return res.status(404).json({ message: 'Thumbnail not found' });
+            }
+            const match = thumb.match(/^data:(image\/\w+);base64,(.+)$/);
+            if (!match) {
+                return res.status(500).json({ message: 'Invalid image data' });
+            }
+            const buffer = Buffer.from(match[2], 'base64');
+            res.setHeader('Content-Type', match[1]);
+            res.setHeader('Cache-Control', 'public, max-age=86400');
+            res.send(buffer);
+        } catch (error) {
+            console.error('Admin thumbnail error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
     // Admin: list all orders with user info
     router.get('/admin/orders', authenticate, async (req, res) => {
         try {
             const adminUser = await requireAdmin(req, res);
             if (!adminUser) return;
 
-            const cacheKey = 'orders:admin:list:v1';
+            const cacheKey = 'orders:admin:list:v2';
             const payload = await readThroughCache('/admin/orders', cacheKey, cacheTtl.adminOrders, async () => {
-                const orders = await orderReadModel.getAllOrders();
+                const orders = await orderReadModel.getAllOrderSummaries();
                 return { orders };
             });
             res.json(payload);
         } catch (error) {
             console.error('Get admin orders error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
+    // Admin: single order detail (full data including images)
+    router.get('/admin/orders/:id', authenticate, async (req, res) => {
+        try {
+            const adminUser = await requireAdmin(req, res);
+            if (!adminUser) return;
+
+            const orderId = Number(req.params.id);
+            if (!Number.isFinite(orderId) || orderId <= 0) {
+                return res.status(400).json({ message: 'Invalid order ID' });
+            }
+
+            const order = await orderReadModel.getAdminOrderDetail(orderId);
+            if (!order) {
+                return res.status(404).json({ message: 'Order not found' });
+            }
+            res.json({ order });
+        } catch (error) {
+            console.error('Get admin order detail error:', error);
             res.status(500).json({ message: 'Internal server error' });
         }
     });

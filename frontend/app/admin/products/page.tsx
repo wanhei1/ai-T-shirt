@@ -247,25 +247,18 @@ export default function ProductsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card/70 backdrop-blur-sm sticky top-0 z-50">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-primary text-primary-foreground flex items-center justify-center font-bold">
-              P
-            </div>
-            <div>
-              <h1 className="text-lg font-semibold">商品 / SKU 管理</h1>
-              <p className="text-xs text-muted-foreground">产品列表、SKU 配置与产能管理</p>
-            </div>
-          </div>
-          <Button variant="outline" size="sm" onClick={loadProducts} disabled={isLoadingProducts}>
-            {isLoadingProducts ? "加载中..." : "刷新"}
-          </Button>
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <div>
+          <h1 className="text-lg font-semibold">商品 / SKU 管理</h1>
+          <p className="text-xs text-muted-foreground">产品列表、SKU 配置与产能管理</p>
         </div>
-      </header>
+        <Button variant="outline" size="sm" onClick={loadProducts} disabled={isLoadingProducts}>
+          {isLoadingProducts ? "加载中..." : "刷新"}
+        </Button>
+      </div>
 
-      <main className="container mx-auto px-4 py-8">
+      <div>
         {error && (
           <Card className="mb-6 border-destructive/40 bg-destructive/5">
             <CardContent className="py-4 text-sm text-destructive">{error}</CardContent>
@@ -511,7 +504,7 @@ export default function ProductsPage() {
             )}
           </CardContent>
         </Card>
-      </main>
+      </div>
     </div>
   );
 }

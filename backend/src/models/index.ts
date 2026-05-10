@@ -275,13 +275,101 @@ export class OrderModel {
                 o.source_all_id,
                 o.created_at,
                 u.email AS user_email,
-                u.username AS user_name
+                u.username AS user_name,
+                o.design->'canvas'->'snapshots'->>'front' AS canvas_front_snapshot,
+                o.design->'canvas'->'snapshots'->>'back' AS canvas_back_snapshot,
+                o.design->'canvas'->'elementSnapshots'->>'front' AS element_front_snapshot,
+                o.design->'canvas'->'elementSnapshots'->>'back' AS element_back_snapshot,
+                o.design->'elements' AS design_elements
             FROM orders o
             LEFT JOIN users u ON o.user_id = u.id
             ORDER BY o.created_at DESC
         `;
         const result = await this.pool.query(query);
         return result.rows || [];
+    }
+
+    /** Lightweight summary for admin list view — excludes heavy base64/image fields */
+    async getAllOrderSummaries() {
+        const query = `
+            SELECT
+                o.id,
+                o.user_id,
+                o.total,
+                o.category,
+                o.status,
+                o.payment_status,
+                o.payment_channel,
+                o.payment_order_id,
+                o.paid_at,
+                o.refund_status,
+                o.refunded_at,
+                o.sku_id,
+                o.production_slot_date,
+                o.production_due_at,
+                o.promised_ship_at,
+                o.shipping_info,
+                o.address,
+                o.phone,
+                o.order_time,
+                o.source_all_id,
+                o.created_at,
+                u.email AS user_email,
+                u.username AS user_name,
+                CASE WHEN o.canvas_front IS NOT NULL THEN true ELSE false END AS has_front_image,
+                CASE WHEN o.canvas_back IS NOT NULL THEN true ELSE false END AS has_back_image
+            FROM orders o
+            LEFT JOIN users u ON o.user_id = u.id
+            ORDER BY o.created_at DESC
+        `;
+        const result = await this.pool.query(query);
+        return result.rows || [];
+    }
+
+    /** Full detail for a single admin order — includes images and design data */
+    async getAdminOrderDetail(orderId: number) {
+        const query = `
+            SELECT
+                o.id,
+                o.user_id,
+                o.total,
+                o.category,
+                o.status,
+                o.payment_status,
+                o.payment_channel,
+                o.payment_order_id,
+                o.paid_at,
+                o.refund_status,
+                o.refunded_at,
+                o.sku_id,
+                o.sku_snapshot,
+                o.production_slot_date,
+                o.production_due_at,
+                o.promised_ship_at,
+                o.items,
+                o.selections,
+                o.shipping_info,
+                o.address,
+                o.phone,
+                o.order_time,
+                o.canvas_meta,
+                o.source_all_id,
+                o.created_at,
+                u.email AS user_email,
+                u.username AS user_name,
+                o.canvas_front,
+                o.canvas_back,
+                o.design->'canvas'->'snapshots'->>'front' AS canvas_front_snapshot,
+                o.design->'canvas'->'snapshots'->>'back' AS canvas_back_snapshot,
+                o.design->'canvas'->'elementSnapshots'->>'front' AS element_front_snapshot,
+                o.design->'canvas'->'elementSnapshots'->>'back' AS element_back_snapshot,
+                o.design->'elements' AS design_elements
+            FROM orders o
+            LEFT JOIN users u ON o.user_id = u.id
+            WHERE o.id = $1
+        `;
+        const result = await this.pool.query(query, [orderId]);
+        return result.rows[0] || null;
     }
 
     async updateOrderStatus(orderId: number, status: string) {

@@ -405,10 +405,8 @@ class ApiClient {
           localStorage.removeItem('token')
           localStorage.removeItem('user')
 
-          // Centralize 401 handling to keep UX consistent.
-          if (window.location.pathname !== '/auth') {
-            window.location.assign('/auth')
-          }
+          // Let the page's auth guard handle the redirect, don't force-redirect here
+          // to avoid redirect loops (e.g. /admin → /auth → /admin)
         }
 
         throw err
@@ -588,6 +586,10 @@ class ApiClient {
   }
 
   // Admin Orders
+  async getAdminOrderDetail(orderId: number) {
+    return this.request<{ order: any }>(`/api/admin/orders/${orderId}`);
+  }
+
   async getAdminOrders() {
     return this.request<{ orders: any[] }>('/api/admin/orders', {
       method: 'GET',

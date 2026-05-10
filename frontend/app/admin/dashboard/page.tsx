@@ -130,8 +130,7 @@ const getBudgetRiskMeta = (estimatedExhaustAt: string | null) => {
 /* ------------------------------------------------------------------ */
 
 export default function AdminDashboardPage() {
-  const router = useRouter();
-  const { user, isLoading } = useAuth();
+  const { user } = useAuth();
 
   const [error, setError] = useState<string | null>(null);
 
@@ -143,18 +142,6 @@ export default function AdminDashboardPage() {
   const [reconciliationReport, setReconciliationReport] = useState<ReconciliationReport | null>(null);
   const [isLoadingReconciliation, setIsLoadingReconciliation] = useState(false);
   const [copiedSqlKey, setCopiedSqlKey] = useState<string | null>(null);
-
-  /* ---- Guard: redirect non-admin ---- */
-  useEffect(() => {
-    if (isLoading) return;
-    if (!user) {
-      router.push("/auth");
-      return;
-    }
-    if (!(user as any)?.is_admin) {
-      router.push("/");
-    }
-  }, [isLoading, user, router]);
 
   /* ---- Load data on mount ---- */
   useEffect(() => {
@@ -249,19 +236,20 @@ export default function AdminDashboardPage() {
   /* ---- Render ---- */
 
   return (
-    <div className="min-h-screen bg-background">
-      <header className="border-b border-border bg-card/70 backdrop-blur-sm sticky top-0 z-50">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <Button variant="outline" size="sm" onClick={() => router.push("/admin")}>
-              返回管理后台
-            </Button>
-            <h1 className="text-lg font-semibold">Dashboard</h1>
-          </div>
+    <div>
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-lg font-semibold">Dashboard</h1>
+        <div className="flex gap-2">
+          <Button variant="outline" size="sm" onClick={loadAiBudget} disabled={isLoadingAiBudget}>
+            {isLoadingAiBudget ? "加载中..." : "刷新预算"}
+          </Button>
+          <Button variant="outline" size="sm" onClick={loadReconciliation} disabled={isLoadingReconciliation}>
+            {isLoadingReconciliation ? "加载中..." : "刷新对账"}
+          </Button>
         </div>
-      </header>
+      </div>
 
-      <main className="container mx-auto px-4 py-6 space-y-6">
+      <div className="space-y-6">
         {error && (
           <Card className="border-destructive/40 bg-destructive/5">
             <CardContent className="py-4 text-sm text-destructive">{error}</CardContent>
@@ -422,7 +410,7 @@ export default function AdminDashboardPage() {
             )}
           </CardContent>
         </Card>
-      </main>
+      </div>
     </div>
   );
 }

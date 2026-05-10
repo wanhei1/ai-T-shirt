@@ -7,7 +7,7 @@ import { Analytics } from "@vercel/analytics/next";
 import { Suspense } from "react";
 import { AuthProvider } from "@/contexts/auth-context";
 import { LanguageProvider } from "@/contexts/language-context";
-import { Navbar } from "@/components/navbar";
+import { NavGuard } from "@/components/nav-guard";
 import "./globals.css";
 
 export const viewport: Viewport = {
@@ -39,7 +39,7 @@ export default function RootLayout({
       <body suppressHydrationWarning className="font-sans antialiased">
         <LanguageProvider>
           <AuthProvider>
-            <Navbar />
+            <NavGuard />
             <Suspense fallback={<div>Loading...</div>}>{children}</Suspense>
             {enableVercelAnalytics ? <Analytics /> : null}
           </AuthProvider>

@@ -16,24 +16,26 @@ export type AdminOrder = {
   address?: string | null;
   shipping_info?: { address?: string | null } | null;
   selections?: Record<string, any> | null;
-  design?: {
-    elements?: Array<{
-      id?: string;
-      type?: string;
-      content?: string;
-      x?: number;
-      y?: number;
-      width?: number;
-      height?: number;
-      rotation?: number;
-      side?: string;
-      visible?: boolean;
-    }>;
-    canvas?: {
-      snapshots?: { front?: string | null; back?: string | null };
-      elementSnapshots?: { front?: string | null; back?: string | null };
-    };
-  } | null;
+  // Lightweight summary flags (from getAllOrderSummaries)
+  has_front_image?: boolean;
+  has_back_image?: boolean;
+  // Full detail fields (from getAdminOrderDetail, loaded on demand)
+  canvas_front_snapshot?: string | null;
+  canvas_back_snapshot?: string | null;
+  element_front_snapshot?: string | null;
+  element_back_snapshot?: string | null;
+  design_elements?: Array<{
+    id?: string;
+    type?: string;
+    content?: string;
+    x?: number;
+    y?: number;
+    width?: number;
+    height?: number;
+    rotation?: number;
+    side?: string;
+    visible?: boolean;
+  }> | null;
   user_name?: string | null;
   user_email?: string | null;
   created_at?: string;

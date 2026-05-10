@@ -179,9 +179,18 @@ const startBillingReconciliationLoop = (pool: Pool | null) => {
 };
 
 // 中间件
+const envOrigins = (process.env.FRONTEND_URL || '')
+    .split(',')
+    .map((s: string) => s.trim())
+    .filter(Boolean);
 const allowedOrigins = [
     'http://localhost:3000',
+    'http://localhost:3001',
+    'http://127.0.0.1:3000',
+    'http://127.0.0.1:3001',
     'http://36.110.14.112:8478',
+    'http://82.157.19.21:8478',
+    ...envOrigins,
 ];
 
 
