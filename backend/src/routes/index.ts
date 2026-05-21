@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { mkdirSync, writeFileSync } from 'fs';
+import { readFile } from 'fs/promises';
 import path from 'path';
 import { AuthController } from '../controllers';
 import { UserModel, OrderModel, MembershipModel, AllDesignModel, CartModel } from '../models';
@@ -13,7 +14,7 @@ import { createRateLimiter } from '../utils/rate-limit';
 import { incrementCounter, setGauge } from '../observability/metrics';
 import { createCacheStore } from '../utils/cache';
 import { logError, logWarn } from '../utils/structured-logger';
-import { externalizeImageDataUrls, type StoredAssetRef } from '../utils/asset-storage';
+import { externalizeImageDataUrls, saveInputImage, type StoredAssetRef } from '../utils/asset-storage';
 import { API_COMMON_ERROR_CODES } from '@v0-t-shirt-design-editor/shared';
 import {
     enqueueJob,
@@ -29,6 +30,42 @@ import {
     validateCreateMembershipPayload,
     validateCreateOrderPayload,
 } from '../validation/request-schemas';
+
+/**
+ * Serve a canvas thumbnail, handling both legacy base64 data URLs
+ * and new file-based URLs (/assets/...).
+ */
+const serveCanvasThumbnail = async (res: any, thumb: string) => {
+    // New format: file URL stored by externalizeImageDataUrls
+    if (thumb.startsWith('/assets/')) {
+        const storageDir = process.env.ASSET_STORAGE_DIR?.trim()
+            || path.join(process.cwd(), 'storage', 'assets');
+        const fileName = thumb.replace(/^\/assets\//, '');
+        const filePath = path.join(storageDir, fileName);
+        try {
+            const buffer = await readFile(filePath);
+            const ext = path.extname(fileName).toLowerCase();
+            const mimeMap: Record<string, string> = {
+                '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+                '.webp': 'image/webp', '.gif': 'image/gif', '.svg': 'image/svg+xml',
+            };
+            res.setHeader('Content-Type', mimeMap[ext] || 'application/octet-stream');
+            res.setHeader('Cache-Control', 'public, max-age=86400');
+            return res.send(buffer);
+        } catch {
+            return res.status(404).json({ message: 'Thumbnail file not found' });
+        }
+    }
+    // Legacy format: base64 data URL
+    const match = thumb.match(/^data:(image\/\w+);base64,(.+)$/);
+    if (!match) {
+        return res.status(404).json({ message: 'Invalid thumbnail format' });
+    }
+    const buffer = Buffer.from(match[2], 'base64');
+    res.setHeader('Content-Type', match[1]);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.send(buffer);
+};
 
 export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
     const router = Router();
@@ -504,7 +541,7 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
     };
 
     const buildJobOptions = () => {
-        const attempts = Math.max(1, Number.parseInt(process.env.JOB_MAX_ATTEMPTS || '1', 10));
+        const attempts = Math.max(1, Number.parseInt(process.env.JOB_MAX_ATTEMPTS || '3', 10));
         const backoffMs = Math.max(0, Number.parseInt(process.env.JOB_BACKOFF_MS || '5000', 10));
         const removeOnComplete = Math.max(10, Number.parseInt(process.env.JOB_REMOVE_ON_COMPLETE || '100', 10));
         const removeOnFail = Math.max(10, Number.parseInt(process.env.JOB_REMOVE_ON_FAIL || '200', 10));
@@ -916,14 +953,7 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
             if (!thumb) {
                 return res.status(404).json({ message: 'Thumbnail not found' });
             }
-            const match = thumb.match(/^data:(image\/\w+);base64,(.+)$/);
-            if (!match) {
-                return res.status(500).json({ message: 'Invalid image data' });
-            }
-            const buffer = Buffer.from(match[2], 'base64');
-            res.setHeader('Content-Type', match[1]);
-            res.setHeader('Cache-Control', 'public, max-age=86400');
-            res.send(buffer);
+            return serveCanvasThumbnail(res, thumb);
         } catch (error) {
             console.error('Gallery thumbnail error:', error);
             res.status(500).json({ message: 'Internal server error' });
@@ -1110,11 +1140,14 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
                 });
             }
 
-            const personDataUrl = typeof payload?.personDataUrl === 'string' ? payload.personDataUrl : '';
-            const clothDataUrl = typeof payload?.clothDataUrl === 'string' ? payload.clothDataUrl : '';
+            let personDataUrl = typeof payload?.personDataUrl === 'string' ? payload.personDataUrl : '';
+            let clothDataUrl = typeof payload?.clothDataUrl === 'string' ? payload.clothDataUrl : '';
             if (!personDataUrl || !clothDataUrl) {
                 return sendError(res, 400, 'INVALID_REQUEST', 'Missing try-on inputs');
             }
+
+            // 可选：换脸源图
+            let faceDataUrl = typeof payload?.faceDataUrl === 'string' ? payload.faceDataUrl : undefined;
 
             // ✅ 安全修复：虚拟试穿也必须登录
             if (!req.userId) return sendError(res, 401, 'UNAUTHORIZED', 'User ID not found');
@@ -1135,13 +1168,30 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
             const canEnqueue = await assertQueueCapacity(TRYON_QUEUE_NAME, res);
             if (!canEnqueue) return;
 
+            // Save input images to disk, store URL instead of base64 in Redis
+            try {
+                const personStored = await saveInputImage(personDataUrl, `person-${Date.now()}`);
+                if (personStored) personDataUrl = personStored.url;
+            } catch (e) { /* keep original base64 */ }
+            try {
+                const clothStored = await saveInputImage(clothDataUrl, `cloth-${Date.now()}`);
+                if (clothStored) clothDataUrl = clothStored.url;
+            } catch (e) { /* keep original base64 */ }
+            if (faceDataUrl) {
+                try {
+                    const faceStored = await saveInputImage(faceDataUrl, `face-${Date.now()}`);
+                    if (faceStored) faceDataUrl = faceStored.url;
+                } catch (e) { /* keep original base64 */ }
+            }
+
             const job = await enqueueJob(
                 TRYON_QUEUE_NAME,
                 {
                     userId: req.userId,
                     personDataUrl,
                     clothDataUrl,
-                    clothType: typeof payload?.clothType === 'string' ? payload.clothType : undefined
+                    clothType: typeof payload?.clothType === 'string' ? payload.clothType : undefined,
+                    faceDataUrl,
                 },
                 buildJobOptions()
             );
@@ -1190,7 +1240,55 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
                 return sendError(res, 404, 'NOT_FOUND', 'Queue not found');
             }
 
-            const job = await getJobById(queueName, req.params.id);
+            let job = await getJobById(queueName, req.params.id);
+
+            // DB fallback: if Redis key expired, check the DB
+            if (!job && (queueName === TRYON_QUEUE_NAME || queueName === AI_QUEUE_NAME) && pool) {
+                try {
+                    let rows: any[] = [];
+                    if (queueName === TRYON_QUEUE_NAME) {
+                        const result = await pool.query(
+                            'SELECT job_id, result_image_url FROM virtual_tryon_results WHERE job_id = $1',
+                            [req.params.id]
+                        );
+                        rows = result.rows;
+                    } else {
+                        const result = await pool.query(
+                            'SELECT job_id, result_image_url, prompt, style FROM ai_image_results WHERE job_id = $1',
+                            [req.params.id]
+                        );
+                        rows = result.rows;
+                    }
+                    if (rows.length > 0) {
+                        const now = Date.now();
+                        const resultData: any = { imageUrl: rows[0].result_image_url };
+                        const jobData: any = {};
+                        if (queueName === AI_QUEUE_NAME) {
+                            if (rows[0].prompt) resultData.prompt = rows[0].prompt;
+                            if (rows[0].style) resultData.style = rows[0].style;
+                            if (rows[0].prompt) jobData.prompt = rows[0].prompt;
+                            if (rows[0].style) jobData.style = rows[0].style;
+                        }
+                        job = {
+                            id: rows[0].job_id,
+                            queue: queueName,
+                            state: 'completed' as const,
+                            progress: 100,
+                            result: resultData,
+                            failedReason: null,
+                            attemptsMade: 1,
+                            maxAttempts: 1,
+                            createdAt: now,
+                            finishedAt: now,
+                            data: jobData,
+                            logs: ['Result recovered from database (Redis key expired)'],
+                        };
+                    }
+                } catch (dbErr) {
+                    console.warn('DB fallback for job failed:', (dbErr as any)?.message || dbErr);
+                }
+            }
+
             if (!job) {
                 return sendError(res, 404, 'NOT_FOUND', 'Job not found');
             }
@@ -3187,14 +3285,7 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
             if (!thumb) {
                 return res.status(404).json({ message: 'Thumbnail not found' });
             }
-            const match = thumb.match(/^data:(image\/\w+);base64,(.+)$/);
-            if (!match) {
-                return res.status(500).json({ message: 'Invalid image data' });
-            }
-            const buffer = Buffer.from(match[2], 'base64');
-            res.setHeader('Content-Type', match[1]);
-            res.setHeader('Cache-Control', 'public, max-age=86400');
-            res.send(buffer);
+            return serveCanvasThumbnail(res, thumb);
         } catch (error) {
             console.error('Thumbnail error:', error);
             res.status(500).json({ message: 'Internal server error' });
@@ -3231,14 +3322,7 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
             if (!thumb) {
                 return res.status(404).json({ message: 'Thumbnail not found' });
             }
-            const match = thumb.match(/^data:(image\/\w+);base64,(.+)$/);
-            if (!match) {
-                return res.status(500).json({ message: 'Invalid image data' });
-            }
-            const buffer = Buffer.from(match[2], 'base64');
-            res.setHeader('Content-Type', match[1]);
-            res.setHeader('Cache-Control', 'public, max-age=86400');
-            res.send(buffer);
+            return serveCanvasThumbnail(res, thumb);
         } catch (error) {
             console.error('Admin thumbnail error:', error);
             res.status(500).json({ message: 'Internal server error' });
@@ -3581,6 +3665,20 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
             const status = typeof req.body?.status === 'string' ? req.body.status.trim() : '';
             if (!status) {
                 return res.status(400).json({ message: 'Status is required' });
+            }
+
+            // Whitelist: only allow known order statuses
+            const ALLOWED_ORDER_STATUSES = [
+                'pending', 'pending_payment', 'paid', 'producing',
+                'shipped', 'completed', 'cancelled', 'refunded',
+                // Legacy values already in DB
+                'processing', 'delivered',
+            ];
+            if (!ALLOWED_ORDER_STATUSES.includes(status)) {
+                return res.status(400).json({
+                    message: `Invalid status: "${status}"`,
+                    allowed: ALLOWED_ORDER_STATUSES,
+                });
             }
 
             const updated = await orderModel.updateOrderStatus(orderId, status);

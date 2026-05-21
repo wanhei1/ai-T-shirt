@@ -29,8 +29,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    // Check for saved auth data on app start
-    const savedToken = localStorage.getItem("token");
+    // Check for saved auth data on app start (unified key: authToken, legacy: token)
+    const savedToken = localStorage.getItem("authToken") || localStorage.getItem("token");
     const savedUser = localStorage.getItem("user");
 
     if (savedToken && savedUser) {
@@ -38,8 +38,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const userData = JSON.parse(savedUser);
         setUser(userData);
         authApi.setAuthToken(savedToken);
+        // Migrate legacy key to unified key
+        localStorage.setItem("authToken", savedToken);
+        localStorage.removeItem("token");
       } catch (error) {
         console.error("Error parsing saved user data:", error);
+        localStorage.removeItem("authToken");
         localStorage.removeItem("token");
         localStorage.removeItem("user");
       }
@@ -50,7 +54,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = async (email: string, password: string) => {
     const response = await authApi.login(email, password);
     setUser(response.user);
-    localStorage.setItem("token", response.token);
+    localStorage.setItem("authToken", response.token);
+    localStorage.removeItem("token");
     localStorage.setItem("user", JSON.stringify(response.user));
     authApi.setAuthToken(response.token);
   };
@@ -62,13 +67,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   ) => {
     const response = await authApi.register(username, email, password);
     setUser(response.user);
-    localStorage.setItem("token", response.token);
+    localStorage.setItem("authToken", response.token);
+    localStorage.removeItem("token");
     localStorage.setItem("user", JSON.stringify(response.user));
     authApi.setAuthToken(response.token);
   };
 
   const logout = () => {
     setUser(null);
+    localStorage.removeItem("authToken");
     localStorage.removeItem("token");
     localStorage.removeItem("user");
     authApi.clearAuthToken();

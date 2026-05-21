@@ -14,6 +14,7 @@ import { Slider } from "@/components/ui/slider"
 import {
   ArrowLeft,
   ArrowRight,
+  Camera,
   Palette,
   Sparkles,
   Type,
@@ -73,6 +74,7 @@ const colorLabels: Record<string, LanguageText> = {
 type TryOnModelGender = "male" | "female"
 const TRYON_MODEL_STORAGE_KEY = "tryOnModelGender"
 const TRYON_CACHE_STORAGE_KEY = "tryOnCacheV1"
+const FACE_IMAGE_STORAGE_KEY = "tryOnFaceImageV1"
 
 type TryOnCache = {
   signature: string
@@ -198,12 +200,24 @@ export default function DesignEditorPage() {
   const [fontSize, setFontSize] = useState<number[]>([24])
   const [selectedFont, setSelectedFont] = useState("Arial")
   const [selectedColor, setSelectedColor] = useState("#000000")
-  const [mobileToolOpen, setMobileToolOpen] = useState(false)
+  const [mobileToolOpen, setMobileToolOpen] = useState(() => {
+    if (typeof window === "undefined") return false
+    return window.innerWidth < 768
+  })
 
   const [tryOnModelGender, setTryOnModelGender] = useState<TryOnModelGender>(() => {
     if (typeof window === "undefined") return "male"
     const v = window.localStorage.getItem(TRYON_MODEL_STORAGE_KEY)
     return v === "female" ? "female" : "male"
+  })
+
+  const [faceDataUrl, setFaceDataUrl] = useState<string | null>(() => {
+    if (typeof window === "undefined") return null
+    try {
+      return window.localStorage.getItem(FACE_IMAGE_STORAGE_KEY)
+    } catch {
+      return null
+    }
   })
 
   const [isContinuingToPreview, setIsContinuingToPreview] = useState(false)
@@ -217,6 +231,19 @@ export default function DesignEditorPage() {
       // ignore storage failures
     }
   }, [tryOnModelGender])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    try {
+      if (faceDataUrl) {
+        window.localStorage.setItem(FACE_IMAGE_STORAGE_KEY, faceDataUrl)
+      } else {
+        window.localStorage.removeItem(FACE_IMAGE_STORAGE_KEY)
+      }
+    } catch {
+      // ignore storage failures
+    }
+  }, [faceDataUrl])
 
   const loadImage = (src: string) =>
     new Promise<HTMLImageElement>((resolve, reject) => {
@@ -257,7 +284,13 @@ export default function DesignEditorPage() {
       queue,
       jobId,
       fetchStatus: apiClient.getJobStatus.bind(apiClient),
-      getResult: (job) => job?.result?.imageUrl as string | undefined,
+        getResult: (job) => {
+          const r = job?.result;
+          if (!r) return undefined;
+          if (typeof r === 'string') return r;
+          if (typeof r === 'object' && r.imageUrl) return r.imageUrl;
+          return undefined;
+        },
       getFailedReason: (job) => job?.failedReason as string | undefined,
       timeoutMs: 10 * 60 * 1000,
       timeoutMessage: "试穿任务等待超时，请稍后重试",
@@ -514,6 +547,7 @@ export default function DesignEditorPage() {
       selections,
       elements: normElements,
       gender: tryOnModelGender,
+      hasFace: !!faceDataUrl,
     }
     return stableStringify(sigObj)
   }
@@ -541,6 +575,7 @@ export default function DesignEditorPage() {
         personDataUrl: resizedPersonDataUrl,
         clothDataUrl: resizedClothDataUrl,
         clothType: "upper",
+        ...(faceDataUrl ? { faceDataUrl } : {}),
       },
     })
 
@@ -1158,13 +1193,13 @@ export default function DesignEditorPage() {
             )}
           </div>
           <div className={`flex items-center ${isMobile ? "gap-1.5 flex-wrap" : "gap-4"}`}>
-            <Badge variant="outline" className={isMobile ? "text-xs px-1.5" : ""}>
-              {isMobile
-                ? translate({ zh: "2/3", en: "2/3" })
-                : translate({ zh: "第 2 步 / 共 3 步", en: "Step 2 of 3" })}
-            </Badge>
+            {!isMobile && (
+              <Badge variant="outline">
+                {translate({ zh: "第 2 步 / 共 3 步", en: "Step 2 of 3" })}
+              </Badge>
+            )}
 
-            <div className={`flex items-center ${isMobile ? "gap-1" : "gap-2"}`}>
+<div className={`flex items-center ${isMobile ? "gap-0.5" : "gap-2"}`}>
               {!isMobile && (
                 <span className="text-sm text-muted-foreground">
                   {translate({ zh: "模特", en: "Model" })}
@@ -1194,6 +1229,58 @@ export default function DesignEditorPage() {
               </div>
             </div>
 
+<div className="flex items-center gap-1.5">
+              <input
+                type="file"
+                id="face-upload-input"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (!file) return
+                  const reader = new FileReader()
+                  reader.onload = () => {
+                    if (typeof reader.result === "string") {
+                      setFaceDataUrl(reader.result)
+                    }
+                  }
+                  reader.readAsDataURL(file)
+                  e.target.value = ""
+                }}
+              />
+              {faceDataUrl ? (
+                <div className="flex items-center gap-1">
+                  <div className="w-8 h-8 rounded-full overflow-hidden border-2 border-primary">
+                    <img src={faceDataUrl} alt="face" className="w-full h-full object-cover" />
+                  </div>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    className="h-6 w-6 p-0 text-muted-foreground hover:text-destructive"
+                    onClick={() => setFaceDataUrl(null)}
+                    disabled={isContinuingToPreview}
+                    title={translate({ zh: "清除人脸图", en: "Clear face image" })}
+                  >
+                    ×
+                  </Button>
+                </div>
+              ) : (
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  className={isMobile ? "h-8 px-2" : ""}
+                  onClick={() => document.getElementById("face-upload-input")?.click()}
+                  disabled={isContinuingToPreview}
+                  title={translate({ zh: "上传人脸照片用于换脸", en: "Upload face photo for face swap" })}
+                >
+                  <Camera className="w-4 h-4 mr-1" />
+                  {!isMobile && translate({ zh: "换脸", en: "Face" })}
+                </Button>
+              )}
+            </div>
+
             <Button onClick={handleContinueToPreview} disabled={designElements.length === 0 || isContinuingToPreview}>
               {isContinuingToPreview ? (
                 <div className={`${isMobile ? "w-[120px]" : "w-[220px]"} flex items-center gap-3`}>
@@ -1207,6 +1294,28 @@ export default function DesignEditorPage() {
                 </>
               )}
             </Button>
+
+            {/* Mobile: control bar elements merged into header */}
+            {isMobile && (
+              <>
+                <div className="flex items-center gap-0.5">
+                  <Button variant="outline" size="sm" className="h-7 w-7 p-0" onClick={handleZoomOut}>
+                    <ZoomOut className="w-3.5 h-3.5" />
+                  </Button>
+                  <Button variant="outline" size="sm" className="h-7 w-7 p-0" onClick={handleZoomIn}>
+                    <ZoomIn className="w-3.5 h-3.5" />
+                  </Button>
+                </div>
+                <div className="flex items-center gap-0.5">
+                  <Button variant={showFront ? "default" : "outline"} size="sm" className="h-7 px-1.5 text-[10px]" onClick={() => setShowFront(true)}>
+                    {translate({ zh: "前", en: "F" })}
+                  </Button>
+                  <Button variant={!showFront ? "default" : "outline"} size="sm" className="h-7 px-1.5 text-[10px]" onClick={() => setShowFront(false)}>
+                    {translate({ zh: "后", en: "B" })}
+                  </Button>
+                </div>
+              </>
+            )}
           </div>
         </div>
       </header>
@@ -1214,7 +1323,7 @@ export default function DesignEditorPage() {
       <div className={`flex ${isMobile ? "flex-col" : ""} h-[calc(100vh-80px)] overflow-hidden`}>
         {/* Left Sidebar - Tools */}
         <div className={isMobile
-          ? `order-3 flex flex-col bg-card border-t border-border transition-all duration-300 ${mobileToolOpen ? "max-h-[50vh]" : "max-h-0 overflow-hidden"}`
+          ? `order-3 flex flex-col bg-card border-t border-border transition-all duration-300 ${mobileToolOpen ? "max-h-[65vh]" : "max-h-0 overflow-hidden"}`
           : "w-80 border-r border-border bg-card/30 flex flex-col"
         }>
           <div className="p-4 flex-1 overflow-y-auto">
@@ -1223,7 +1332,7 @@ export default function DesignEditorPage() {
             </h2>
 
             <Tabs value={activeTab} onValueChange={setActiveTab}>
-              <TabsList className="grid w-full grid-cols-3">
+              <TabsList className={`grid w-full ${isMobile ? "grid-cols-4" : "grid-cols-3"}`}>
                 <TabsTrigger value="ai" className="text-xs">
                   <Sparkles className="w-4 h-4 mr-1" />
                   {translate({ zh: "AI", en: "AI" })}
@@ -1236,10 +1345,16 @@ export default function DesignEditorPage() {
                   <Upload className="w-4 h-4 mr-1" />
                   {translate({ zh: "上传", en: "Upload" })}
                 </TabsTrigger>
+                {isMobile && (
+                  <TabsTrigger value="face" className="text-xs">
+                    <Camera className="w-4 h-4 mr-1" />
+                    {translate({ zh: "换脸", en: "Face" })}
+                  </TabsTrigger>
+                )}
               </TabsList>
 
               <TabsContent value="ai" className="space-y-4 mt-4">
-                <AIGenerator onImageGenerated={(imageUrl) => addImageElement(imageUrl, "ai-generated")} />
+                <AIGenerator onImageGenerated={(imageUrl) => addImageElement(imageUrl, "ai-generated")} compact={isMobile} />
               </TabsContent>
 
               <TabsContent value="text" className="space-y-4 mt-4">
@@ -1321,6 +1436,90 @@ export default function DesignEditorPage() {
 
               <TabsContent value="upload" className="space-y-4 mt-4">
                 <ImageUploader onImageUploaded={(imageUrl) => addImageElement(imageUrl, "image")} />
+              </TabsContent>
+
+              <TabsContent value="face" className="space-y-4 mt-4">
+                <Card>
+                  <CardHeader className="p-0 pb-2">
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <Camera className="w-4 h-4" />
+                      {translate({ zh: "AI 换脸试衣", en: "AI Face Swap Try-On" })}
+                    </CardTitle>
+                    <CardDescription>
+                      {translate({ zh: "上传人脸照片，AI 会将你的脸替换到试穿效果图中", en: "Upload a face photo, AI will swap your face onto the try-on preview" })}
+                    </CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    <div className="rounded-md bg-muted/50 p-3 text-sm space-y-2">
+                      <p className="font-medium">{translate({ zh: "📋 功能说明", en: "📋 Feature" })}</p>
+                      <p className="text-muted-foreground">
+                        {translate({
+                          zh: "上传一张正面人脸照片，AI 会自动检测人脸并在生成试穿效果图时将你的脸替换上去，让效果更真实。",
+                          en: "Upload a front-facing photo. AI detects your face and swaps it onto the try-on preview for a more realistic result.",
+                        })}
+                      </p>
+                    </div>
+                    <div className="rounded-md bg-muted/50 p-3 text-sm space-y-2">
+                      <p className="font-medium">{translate({ zh: "🚀 使用步骤", en: "🚀 How to Use" })}</p>
+                      <ol className="list-decimal list-inside text-muted-foreground space-y-1">
+                        <li>{translate({ zh: "点击下方按钮上传一张正面人脸照片", en: "Click the button below to upload a front-facing photo" })}</li>
+                        <li>{translate({ zh: "选择性别（男/女）", en: "Select gender (Male/Female)" })}</li>
+<li>{translate({ zh: "设计好T恤图案后，点击「前往预览」", en: "Design your T-shirt, then click 'Continue to Preview'" })}</li>
+                        <li>{translate({ zh: "AI 会自动生成带换脸效果的试穿图", en: "AI will generate a try-on image with your face swapped in" })}</li>
+                      </ol>
+                    </div>
+
+                    <input
+                      type="file"
+                      id="face-panel-upload-input"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0]
+                        if (!file) return
+                        const reader = new FileReader()
+                        reader.onload = () => {
+                          if (typeof reader.result === "string") {
+                            setFaceDataUrl(reader.result)
+                          }
+                        }
+                        reader.readAsDataURL(file)
+                        e.target.value = ""
+                      }}
+                    />
+
+                    {faceDataUrl ? (
+                      <div className="flex items-center gap-3 p-3 border rounded-lg">
+                        <div className="w-16 h-16 rounded-full overflow-hidden border-2 border-primary flex-shrink-0">
+                          <img src={faceDataUrl} alt="face" className="w-full h-full object-cover" />
+                        </div>
+                        <div className="flex-1">
+                          <p className="text-sm font-medium">{translate({ zh: "已上传人脸照片", en: "Face photo uploaded" })}</p>
+                          <p className="text-xs text-muted-foreground">{translate({ zh: "将在试穿时自动换脸", en: "Will be used for face swap during try-on" })}</p>
+                        </div>
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
+                          onClick={() => setFaceDataUrl(null)}
+                        >
+                          ×
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="w-full"
+                        onClick={() => document.getElementById("face-panel-upload-input")?.click()}
+                      >
+                        <Camera className="w-4 h-4 mr-2" />
+                        {translate({ zh: "上传人脸照片", en: "Upload Face Photo" })}
+                      </Button>
+                    )}
+                  </CardContent>
+                </Card>
               </TabsContent>
             </Tabs>
 
@@ -1418,43 +1617,66 @@ export default function DesignEditorPage() {
         </div>
 
         {/* Main Canvas Area */}
-        <div className={`flex-1 flex flex-col min-w-0 ${isMobile ? "order-1 overflow-hidden" : ""}`}>
+        <div className={`flex-1 flex flex-col min-w-0 ${isMobile ? "order-1 overflow-auto" : ""}`}>
           {/* Canvas Controls */}
-          <div className="border-b border-border p-4 bg-card/30 shrink-0">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-4">
-                <h3 className="font-semibold">{titleText}</h3>
-                <Badge variant="outline">{sizeLabel}</Badge>
+          <div className={`border-b border-border ${isMobile ? "px-2 py-2" : "p-4"} bg-card/30 shrink-0`}>
+            {isMobile ? (
+              /* Mobile: design tools bar (AI/Text/Upload/Color) */
+              <div className="flex items-center justify-around">
+                {[
+                  { tab: "ai", icon: Sparkles, label: "AI" },
+                  { tab: "text", icon: Type, label: translate({ zh: "文字", en: "Text" }) },
+                  { tab: "upload", icon: Upload, label: translate({ zh: "上传", en: "Upload" }) },
+                  { tab: "face", icon: Camera, label: translate({ zh: "换脸", en: "Face" }) },
+                ].map(({ tab, icon: Icon, label }) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    className={`flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-md transition-colors ${
+                      activeTab === tab && mobileToolOpen
+                        ? "bg-primary text-primary-foreground"
+                        : "text-muted-foreground hover:bg-muted"
+                    }`}
+                    onClick={() => {
+                      setActiveTab(tab)
+                      setMobileToolOpen(activeTab === tab ? !mobileToolOpen : true)
+                    }}
+                  >
+                    <Icon className="w-5 h-5" />
+                    <span className="text-[10px]">{label}</span>
+                  </button>
+                ))}
               </div>
-              <div className="flex items-center gap-2">
-                <div className="flex items-center gap-1 mr-4">
-                  <Button variant="outline" size="sm" onClick={handleZoomOut}>
-                    <ZoomOut className="w-4 h-4" />
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={handleResetZoom}>
-                    {Math.round(canvasZoom * 100)}%
-                  </Button>
-                  <Button variant="outline" size="sm" onClick={handleZoomIn}>
-                    <ZoomIn className="w-4 h-4" />
-                  </Button>
-                </div>
-
+            ) : (
+              /* Desktop: original controls */
+              <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
-                  <Button variant={showFront ? "default" : "outline"} size="sm" onClick={() => setShowFront(true)}>
-                    {translate({
-                      zh: `前面 (${frontElementCount})`,
-                      en: `Front (${frontElementCount})`,
-                    })}
-                  </Button>
-                  <Button variant={!showFront ? "default" : "outline"} size="sm" onClick={() => setShowFront(false)}>
-                    {translate({
-                      zh: `背面 (${backElementCount})`,
-                      en: `Back (${backElementCount})`,
-                    })}
-                  </Button>
+                  <h3 className="font-semibold">{titleText}</h3>
+                  <Badge variant="outline">{sizeLabel}</Badge>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-1 mr-4">
+                    <Button variant="outline" size="sm" onClick={handleZoomOut}>
+                      <ZoomOut className="w-4 h-4" />
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={handleResetZoom}>
+                      {Math.round(canvasZoom * 100)}%
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={handleZoomIn}>
+                      <ZoomIn className="w-4 h-4" />
+                    </Button>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button variant={showFront ? "default" : "outline"} size="sm" onClick={() => setShowFront(true)}>
+                      {translate({ zh: `前面 (${frontElementCount})`, en: `Front (${frontElementCount})` })}
+                    </Button>
+                    <Button variant={!showFront ? "default" : "outline"} size="sm" onClick={() => setShowFront(false)}>
+                      {translate({ zh: `背面 (${backElementCount})`, en: `Back (${backElementCount})` })}
+                    </Button>
+                  </div>
                 </div>
               </div>
-            </div>
+            )}
 
             {isDev && (
               <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
@@ -1511,8 +1733,8 @@ export default function DesignEditorPage() {
           </div>
 
           {/* Canvas */}
-          <div className="flex-1 p-4 bg-muted/20 overflow-auto">
-            <div className="min-h-full w-full mx-auto flex items-center justify-center">
+          <div className={`${isMobile ? "h-[50vh]" : "flex-1"} p-4 bg-muted/20 overflow-auto`}>
+            <div className={`${isMobile ? "" : "min-h-full"} w-full mx-auto flex items-center justify-center`}>
               <div
                 ref={canvasRef}
                 className="relative select-none"
@@ -1672,7 +1894,9 @@ export default function DesignEditorPage() {
                             })}
                           </p>
                           <p className="text-xs">
-                            {translate({ zh: "使用左侧工具添加元素", en: "Use the tools on the left to add elements" })}
+                            {isMobile
+                              ? translate({ zh: "使用上方工具栏添加元素", en: "Use the toolbar above to add elements" })
+                              : translate({ zh: "使用左侧工具添加元素", en: "Use the tools on the left to add elements" })}
                           </p>
                           {otherSideCount > 0 && (
                             <p className="text-xs mt-2 text-primary">
@@ -1691,67 +1915,7 @@ export default function DesignEditorPage() {
             </div>
         </div>
 
-        {/* Mobile Bottom Toolbar */}
-        {isMobile && (
-          <div className="order-2 shrink-0 flex items-center justify-around bg-card border-t border-border py-3 px-2">
-            <button
-              type="button"
-              className={`flex flex-col items-center gap-1 px-4 py-2 rounded-md transition-colors ${
-                activeTab === "ai" && mobileToolOpen
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-muted"
-              }`}
-              onClick={() => {
-                setActiveTab("ai")
-                setMobileToolOpen(activeTab === "ai" ? !mobileToolOpen : true)
-              }}
-            >
-              <Sparkles className="w-5 h-5" />
-              <span className="text-[10px]">AI</span>
-            </button>
-            <button
-              type="button"
-              className={`flex flex-col items-center gap-1 px-4 py-2 rounded-md transition-colors ${
-                activeTab === "text" && mobileToolOpen
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-muted"
-              }`}
-              onClick={() => {
-                setActiveTab("text")
-                setMobileToolOpen(activeTab === "text" ? !mobileToolOpen : true)
-              }}
-            >
-              <Type className="w-5 h-5" />
-              <span className="text-[10px]">{translate({ zh: "文字", en: "Text" })}</span>
-            </button>
-            <button
-              type="button"
-              className={`flex flex-col items-center gap-1 px-4 py-2 rounded-md transition-colors ${
-                activeTab === "upload" && mobileToolOpen
-                  ? "bg-primary text-primary-foreground"
-                  : "text-muted-foreground hover:bg-muted"
-              }`}
-              onClick={() => {
-                setActiveTab("upload")
-                setMobileToolOpen(activeTab === "upload" ? !mobileToolOpen : true)
-              }}
-            >
-              <Upload className="w-5 h-5" />
-              <span className="text-[10px]">{translate({ zh: "上传", en: "Upload" })}</span>
-            </button>
-            <button
-              type="button"
-              className="flex flex-col items-center gap-1 px-4 py-2 rounded-md transition-colors text-muted-foreground hover:bg-muted"
-              onClick={() => {
-                setActiveTab("text")
-                setMobileToolOpen(true)
-              }}
-            >
-              <Palette className="w-5 h-5" />
-              <span className="text-[10px]">{translate({ zh: "颜色", en: "Color" })}</span>
-            </button>
-          </div>
-        )}
+
 
       </div>
     </div>

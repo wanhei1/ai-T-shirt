@@ -199,13 +199,67 @@ app.use(cors({
     credentials: true
 }));
 
+// Trust first proxy (Caddy/nginx) for correct IP resolution
+app.set('trust proxy', 1);
+
+// ── Rate Limiters ──────────────────────────────────────────────
+const rateLimitKeyGenerator = (req: Request) => {
+    // Prefer authenticated user ID for per-user limits, fall back to IP
+    const authHeader = req.headers.authorization || '';
+    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+    if (token) {
+        try {
+            const payload = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString());
+            if (payload.userId) return `user:${payload.userId}`;
+        } catch { /* ignore malformed tokens */ }
+    }
+    return req.ip || req.socket.remoteAddress || 'unknown';
+};
+
+// Auth endpoints: 5/min/IP (strict)
 const authLimiter = rateLimit({
-    windowMs: 15 * 60 * 1000,
-    max: 20,
-    message: { error: '请求过于频繁，请稍后再试' }
+    windowMs: 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => req.ip || req.socket.remoteAddress || 'unknown',
+    message: { error: 'Too many requests', retryAfter: 60 },
 });
+
+// AI task submission: 10/min per user or IP
+const aiSubmitLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: rateLimitKeyGenerator,
+    message: { error: 'Too many requests', retryAfter: 60 },
+});
+
+// Job polling: 120/min/IP (generous for frontend polling)
+const pollLimiter = rateLimit({
+    windowMs: 60 * 1000,
+    max: 120,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => req.ip || req.socket.remoteAddress || 'unknown',
+    message: { error: 'Too many requests', retryAfter: 60 },
+});
+
+// General API: 300/15min/IP
+const generalLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 300,
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => req.ip || req.socket.remoteAddress || 'unknown',
+    message: { error: 'Too many requests', retryAfter: 60 },
+});
+
+// Apply auth limiter to login/register
 app.use('/api/login', authLimiter);
 app.use('/api/register', authLimiter);
+
 // Increase JSON and URL-encoded body size limits to allow larger payloads.
 // Orders can include embedded design images (data URLs), which easily exceed small defaults.
 // For production, prefer uploading large files to object storage and sending references.
@@ -363,6 +417,17 @@ const initializeApp = async () => {
 
             res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
             return res.send(getMetricsAsPrometheus());
+        });
+
+        app.use('/api', generalLimiter);
+
+        // Per-route limiters (more restrictive than general)
+        // Note: auth limiter already applied above for /api/login and /api/register
+        app.use('/api/generate', aiSubmitLimiter);
+        app.use('/api/jobs', (req, res, next) => {
+            if (req.method === 'POST') return aiSubmitLimiter(req, res, next);
+            if (req.method === 'GET') return pollLimiter(req, res, next);
+            next();
         });
 
         app.use('/api', createRoutes(pool, readPool));

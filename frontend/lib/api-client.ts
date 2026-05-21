@@ -511,11 +511,18 @@ class ApiClient {
 
   getThumbnailUrl(orderId: number | string): string {
     // Use Next.js /backend/ proxy so mobile browsers don't need direct access to port 8189
-    return `/backend/api/orders/${orderId}/thumbnail`;
+    // Append auth token as query param so <img> tags can authenticate (they can't send Authorization headers)
+    const token = typeof window !== 'undefined'
+      ? (localStorage.getItem('authToken') || localStorage.getItem('token') || '')
+      : '';
+    return `/backend/api/orders/${orderId}/thumbnail${token ? `?token=${encodeURIComponent(token)}` : ''}`;
   }
 
   getGalleryThumbnailUrl(designId: number | string): string {
-    return `/backend/api/gallery/${designId}/thumbnail`;
+    const token = typeof window !== 'undefined'
+      ? (localStorage.getItem('authToken') || localStorage.getItem('token') || '')
+      : '';
+    return `/backend/api/gallery/${designId}/thumbnail${token ? `?token=${encodeURIComponent(token)}` : ''}`;
   }
 
   async createPaymentIntent(payload: { orderId: number; channel: 'alipay'; amount: number }) {

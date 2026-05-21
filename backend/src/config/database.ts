@@ -38,18 +38,19 @@ const createPoolFromCandidates = async (candidates: string[], label: string) => 
 
         try {
             const client = await pool.connect();
-            console.log(`Connected to ${label} database successfully (${candidate})`);
+            const masked = candidate.replace(/:\/\/([^:]+):([^@]+)@/, '://$1:***@');
+            console.log(`Connected to ${label} database successfully (${masked})`);
             client.release();
             return pool;
         } catch (error) {
             lastError = error;
-            console.error(`${label} database connection failed for ${candidate}:`, error);
+            console.error(`${label} database connection failed for endpoint:`, error);
             await pool.end().catch(() => undefined);
         }
     }
 
     throw new Error(
-        `Unable to connect to any configured ${label} database endpoints: ${candidates.join(', ')}. Last error: ${
+        `Unable to connect to any configured ${label} database endpoints. Last error: ${
             lastError instanceof Error ? lastError.message : String(lastError)
         }`
     );

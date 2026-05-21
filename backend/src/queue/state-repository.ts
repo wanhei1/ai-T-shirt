@@ -111,12 +111,12 @@ class RedisJobStateRepository implements JobStateRepository {
         return;
       } catch (error) {
         lastError = error;
-        console.warn(`Redis state repository connect failed for ${redisUrl}:`, error);
+        console.warn(`Redis state repository connect failed:`, error);
       }
     }
 
     throw new Error(
-      `All REDIS endpoints are unavailable for job state repository: ${this.redisUrls.join(", ")}. Last error: ${
+      `All REDIS endpoints are unavailable for job state repository. Last error: ${
         lastError instanceof Error ? lastError.message : String(lastError)
       }`
     );
@@ -229,6 +229,12 @@ class RedisJobStateRepository implements JobStateRepository {
     }
 
     await tx.exec();
+
+    // Set TTL on completed/failed jobs to prevent unbounded memory growth
+    if (patch.state === "completed" || patch.state === "failed") {
+      const ttlSeconds = Math.max(3600, Number.parseInt(process.env.JOB_STATE_TTL_SECONDS || "604800", 10));
+      await client.expire(jobKey, ttlSeconds).catch(() => undefined);
+    }
   }
 
   async getJobById(queue: QueueName, jobId: string): Promise<JobRecord | null> {

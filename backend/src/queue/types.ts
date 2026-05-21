@@ -21,6 +21,7 @@ export type TryOnJobPayload = {
   personDataUrl: string;
   clothDataUrl: string;
   clothType?: "upper" | "lower" | "overall";
+  faceDataUrl?: string; // 可选：换脸源图
 };
 
 export type JobPayload = AIImageJobPayload | TryOnJobPayload;

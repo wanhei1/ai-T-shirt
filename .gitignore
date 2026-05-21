@@ -97,3 +97,10 @@ detectron2/
 **/user/
 artifacts/backup/
 artifacts/reconciliation/
+
+# migration backups
+backend/storage/migration-backups/
+
+# large binary archives
+*.rar
+*.sql.gz

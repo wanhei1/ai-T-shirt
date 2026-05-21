@@ -636,11 +636,48 @@ const ensureMembershipTables = async (pool: Pool) => {
     `);
 };
 
+const ensureVirtualTryonResultsTable = async (pool: Pool) => {
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS virtual_tryon_results (
+            id SERIAL PRIMARY KEY,
+            job_id VARCHAR(64) UNIQUE NOT NULL,
+            result_image_url TEXT NOT NULL,
+            cloth_type VARCHAR(16),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+    try {
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_tryon_results_job_id ON virtual_tryon_results(job_id)`);
+    } catch (err) {
+        console.warn('⚠️ Failed to ensure virtual_tryon_results indexes:', (err as any)?.message || err);
+    }
+};
+
+const ensureAiImageResultsTable = async (pool: Pool) => {
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS ai_image_results (
+            id SERIAL PRIMARY KEY,
+            job_id VARCHAR(64) UNIQUE NOT NULL,
+            result_image_url TEXT NOT NULL,
+            prompt TEXT,
+            style VARCHAR(32),
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+    try {
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_ai_image_results_job_id ON ai_image_results(job_id)`);
+    } catch (err) {
+        console.warn('⚠️ Failed to ensure ai_image_results indexes:', (err as any)?.message || err);
+    }
+};
+
 export const runStartupDbMigrations = async (pool: Pool) => {
     await ensureSchemaMigrationsTable(pool);
     await ensureUsersAndAdmin(pool);
     await ensureReferralRedemptions(pool);
     await ensureOrderAndDesignTables(pool);
     await ensureMembershipTables(pool);
+    await ensureVirtualTryonResultsTable(pool);
+    await ensureAiImageResultsTable(pool);
     await markMigrationExecuted(pool, SCHEMA_MIGRATION_NAME);
 };

@@ -27,7 +27,9 @@ const main = async () => {
   console.log("🧵 Starting background job workers...");
   await initializeQueueStateRepository();
   await getRabbitConnection();
-  console.log(`✅ RabbitMQ connected: ${rabbitmqUrl}`);
+  // Mask password in URL before logging
+  const maskedUrl = rabbitmqUrl.replace(/:[^/@]+@/, ':***@');
+  console.log(`✅ RabbitMQ connected: ${maskedUrl}`);
   const stopWorkers = startJobWorkers();
   registerShutdown(stopWorkers);
 

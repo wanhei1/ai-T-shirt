@@ -1,6 +1,8 @@
 import * as amqp from "amqplib";
+import * as path from "path";
 import { existsSync, readFileSync } from "fs";
 import { getRabbitConnection } from "./connection";
+import { Pool } from "pg";
 import {
   AI_QUEUE_NAME,
   TRYON_QUEUE_NAME,
@@ -13,6 +15,15 @@ import { SimpleComfyUIClient } from "../services/simpleComfyuiClient";
 import type { AIImageJobPayload, TryOnJobPayload } from "./types";
 import { incrementCounter, observeHistogram } from "../observability/metrics";
 import { logError, logInfo, logWarn } from "../utils/structured-logger";
+import { saveTryOnResult, saveAiResult, storeBuffer } from "../utils/asset-storage";
+
+let _tryonDbPool: Pool | null = null;
+const getDbPool = (): Pool => {
+  if (!_tryonDbPool) {
+    _tryonDbPool = new Pool({ connectionString: process.env.DATABASE_URL });
+  }
+  return _tryonDbPool;
+};
 
 const trackComfyUiMetrics = async <T>(operation: "ai-generate" | "tryon", fn: () => Promise<T>): Promise<T> => {
   const startAt = Date.now();
@@ -38,9 +49,10 @@ const AI_CONCURRENCY = Number.parseInt(process.env.JOB_CONCURRENCY_AI || "1", 10
 const TRYON_CONCURRENCY = Number.parseInt(process.env.JOB_CONCURRENCY_TRYON || "1", 10);
 
 const COMFYUI_URL = process.env.COMFYUI_URL || "http://127.0.0.1:8188";
+const COMFYUI_ROOT = process.env.COMFYUI_ROOT || path.join(process.cwd(), "ComfyUI");
 const DEFAULT_IMAGE_WORKFLOW_PATHS = [
-  "/usrhome/tyx/.data/FUZHUANG/custom-tshirt-designer/ComfyUI/user/default/workflows/imagegenerate_workflow.json",
-  "/usrhome/tyx/.data/FUZHUANG/custom-tshirt-designer/ComfyUI/user/default/workflows/imagegenarate_workflow.json",
+  path.join(COMFYUI_ROOT, "user/default/workflows/imagegenerate_workflow.json"),
+  path.join(COMFYUI_ROOT, "user/default/workflows/imagegenarate_workflow.json"),
 ];
 
 const PURE_ELEMENT_PREFIX =
@@ -244,6 +256,28 @@ function forceLocalIfRepoId(value: string, repoIds: string[], localCandidates: s
 }
 
 function dataUrlToBlob(dataUrl: string) {
+  // If it's a file URL (not a data URL), read from disk
+  if (!dataUrl.startsWith("data:")) {
+    const fs = require("fs");
+    const p = require("path");
+    // Resolve: if it's a relative URL like /assets/filename.png, resolve to asset dir
+    let filePath = dataUrl;
+    if (dataUrl.startsWith("/")) {
+      const assetDir = process.env.ASSET_STORAGE_DIR || p.join(process.cwd(), "storage", "assets");
+      filePath = p.join(assetDir, p.basename(dataUrl));
+    }
+    const buffer = fs.readFileSync(filePath);
+    const ext = p.extname(filePath).toLowerCase();
+    const mimeMap: Record<string, string> = {
+      ".png": "image/png",
+      ".jpg": "image/jpeg",
+      ".jpeg": "image/jpeg",
+      ".webp": "image/webp",
+      ".gif": "image/gif",
+    };
+    const mime = mimeMap[ext] || "image/png";
+    return { buffer, mime };
+  }
   const [header, base64] = dataUrl.split(",");
   const mimeMatch = header.match(/data:(.*?);base64/);
   const mime = mimeMatch?.[1] || "image/png";
@@ -358,6 +392,117 @@ function buildCatVtonWorkflow(params: {
       inputs: {
         filename_prefix: filenamePrefix,
         images: ["16", 0],
+      },
+    },
+  };
+}
+
+function buildCatVtonWithFaceSwapWorkflow(params: {
+  personFilename: string;
+  clothFilename: string;
+  faceFilename: string;
+  catvtonPath: string;
+  sd15InpaintPath: string;
+  vaePath: string;
+  mixedPrecision: "fp32" | "fp16" | "bf16";
+  clothType: "upper" | "lower" | "overall";
+  seed: number;
+  steps: number;
+  cfg: number;
+  filenamePrefix: string;
+}): Record<string, unknown> {
+  const {
+    personFilename,
+    clothFilename,
+    faceFilename,
+    catvtonPath,
+    sd15InpaintPath,
+    vaePath,
+    mixedPrecision,
+    clothType,
+    seed,
+    steps,
+    cfg,
+    filenamePrefix,
+  } = params;
+
+  return {
+    "10": {
+      class_type: "LoadImage",
+      inputs: {
+        image: personFilename,
+      },
+    },
+    "11": {
+      class_type: "LoadImage",
+      inputs: {
+        image: clothFilename,
+      },
+    },
+    "12": {
+      class_type: "LoadAutoMasker",
+      inputs: {
+        catvton_path: catvtonPath,
+      },
+    },
+    "13": {
+      class_type: "AutoMasker",
+      inputs: {
+        pipe: ["12", 0],
+        target_image: ["10", 0],
+        cloth_type: clothType,
+      },
+    },
+    "17": {
+      class_type: "LoadCatVTONPipeline",
+      inputs: {
+        sd15_inpaint_path: sd15InpaintPath,
+        catvton_path: catvtonPath,
+        mixed_precision: mixedPrecision,
+        vae_path: vaePath,
+      },
+    },
+    "16": {
+      class_type: "CatVTON",
+      inputs: {
+        pipe: ["17", 0],
+        target_image: ["10", 0],
+        refer_image: ["11", 0],
+        mask_image: ["13", 0],
+        seed,
+        steps,
+        cfg,
+      },
+    },
+    "30": {
+      class_type: "LoadImage",
+      inputs: {
+        image: faceFilename,
+      },
+    },
+    "31": {
+      class_type: "ReActorFaceSwap",
+      inputs: {
+        enabled: true,
+        input_image: ["16", 0],
+        source_image: ["30", 0],
+        swap_model: "inswapper_128.onnx",
+        facedetection: "retinaface_resnet50",
+        face_restore_model: "GFPGANv1.4.pth",
+        face_restore_visibility: 1.0,
+        codeformer_weight: 0.5,
+        detect_gender_input: "no",
+        detect_gender_source: "no",
+        input_faces_index: "0",
+        source_faces_index: "0",
+        console_log_level: 1,
+      },
+    },
+    "32": {
+      class_type: "SaveImage",
+      inputs: {
+        filename_prefix: filenamePrefix,
+        images: ["31", 0],
       },
     },
   };
@@ -733,11 +878,9 @@ async function runAiImageJob(payload: AIImageJobPayload) {
     });
   });
 
-  const base64 = Buffer.from(result.imageBuffer).toString("base64");
-  const dataUrl = `data:image/png;base64,${base64}`;
-
   return {
-    imageUrl: dataUrl,
+    imageBuffer: result.imageBuffer,
+    imageMimeType: "image/png",
     prompt,
     style: style || "realistic",
   };
@@ -768,28 +911,41 @@ async function runTryOnJob(payload: TryOnJobPayload) {
     const personName = `tryon-person-${suffix}.png`;
     const clothName = `tryon-cloth-${suffix}.png`;
 
-    const [personFilename, clothFilename] = await Promise.all([
+    const uploadPromises: Promise<string>[] = [
       uploadToComfyInput(active, payload.personDataUrl, personName),
       uploadToComfyInput(active, payload.clothDataUrl, clothName),
-    ]);
+    ];
 
+    // 如果提供了换脸源图，也上传
+    let faceFilename: string | null = null;
+    if (payload.faceDataUrl) {
+      const faceName = `tryon-face-${suffix}.png`;
+      uploadPromises.push(uploadToComfyInput(active, payload.faceDataUrl, faceName));
+    }
+
+    const uploadResults = await Promise.all(uploadPromises);
+    const personFilename = uploadResults[0];
+    const clothFilename = uploadResults[1];
+    if (payload.faceDataUrl) {
+      faceFilename = uploadResults[2];
+    }
     const defaultCatvtonPath = pickLocalModelPath(
       [
-        "/usrhome/tyx/.data/FUZHUANG/custom-tshirt-designer/ComfyUI/models/catvton",
-        "/usrhome/tyx/.data/FUZHUANG/custom-tshirt-designer/ComfyUI/custom_nodes/ComfyUI-CatVTON",
+        path.join(COMFYUI_ROOT, "models/catvton"),
+        path.join(COMFYUI_ROOT, "custom_nodes/ComfyUI-CatVTON"),
       ],
       "zhengchong/CatVTON"
     );
     const defaultSd15InpaintPath = pickLocalModelPath(
       [
-        "/usrhome/tyx/.data/FUZHUANG/custom-tshirt-designer/ComfyUI/models/catvton/stable-diffusion-inpainting",
-        "/usrhome/tyx/.data/FUZHUANG/custom-tshirt-designer/ComfyUI/models/sd15_inpaint",
+        path.join(COMFYUI_ROOT, "models/catvton/stable-diffusion-inpainting"),
+        path.join(COMFYUI_ROOT, "models/sd15_inpaint"),
       ],
       "runwayml/stable-diffusion-inpainting"
     );
     const defaultVaePath = pickLocalModelPath(
       [
-        "/usrhome/tyx/.data/FUZHUANG/custom-tshirt-designer/ComfyUI/models/catvton/sd-vae-ft-mse",
+        path.join(COMFYUI_ROOT, "models/catvton/sd-vae-ft-mse"),
       ],
       "stabilityai/sd-vae-ft-mse"
     );
@@ -798,16 +954,16 @@ async function runTryOnJob(payload: TryOnJobPayload) {
       getEnvString("CATVTON_PATH", defaultCatvtonPath),
       ["zhengchong/CatVTON"],
       [
-        "/usrhome/tyx/.data/FUZHUANG/custom-tshirt-designer/ComfyUI/models/catvton",
-        "/usrhome/tyx/.data/FUZHUANG/custom-tshirt-designer/ComfyUI/custom_nodes/ComfyUI-CatVTON",
+        path.join(COMFYUI_ROOT, "models/catvton"),
+        path.join(COMFYUI_ROOT, "custom_nodes/ComfyUI-CatVTON"),
       ]
     );
     const sd15InpaintPath = forceLocalIfRepoId(
       getEnvString("SD15_INPAINT_PATH", defaultSd15InpaintPath),
       ["runwayml/stable-diffusion-inpainting", "booksforcharlie/stable-diffusion-inpainting"],
       [
-        "/usrhome/tyx/.data/FUZHUANG/custom-tshirt-designer/ComfyUI/models/catvton/stable-diffusion-inpainting",
-        "/usrhome/tyx/.data/FUZHUANG/custom-tshirt-designer/ComfyUI/models/sd15_inpaint",
+        path.join(COMFYUI_ROOT, "models/catvton/stable-diffusion-inpainting"),
+        path.join(COMFYUI_ROOT, "models/sd15_inpaint"),
       ]
     );
     const vaePath = getEnvString("SD_VAE_PATH", defaultVaePath);
@@ -817,29 +973,43 @@ async function runTryOnJob(payload: TryOnJobPayload) {
     const tryonCfg = Math.max(1.0, Math.min(8.0, getEnvFloat("TRYON_CFG", 2.5)));
     const clothType = payload.clothType || (getEnvString("TRYON_CLOTH_TYPE", "upper") as "upper" | "lower" | "overall");
 
-    const workflow = buildCatVtonWorkflow({
-      personFilename,
-      clothFilename,
-      catvtonPath,
-      sd15InpaintPath,
-      vaePath,
-      mixedPrecision,
-      clothType,
-      seed: Math.floor(Math.random() * 100000),
-      steps: tryonSteps,
-      cfg: tryonCfg,
-      filenamePrefix: "tryon",
-    });
+    // 根据是否提供换脸源图选择不同的工作流
+    const workflow = faceFilename
+      ? buildCatVtonWithFaceSwapWorkflow({
+          personFilename,
+          clothFilename,
+          faceFilename,
+          catvtonPath,
+          sd15InpaintPath,
+          vaePath,
+          mixedPrecision,
+          clothType,
+          seed: Math.floor(Math.random() * 100000),
+          steps: tryonSteps,
+          cfg: tryonCfg,
+          filenamePrefix: "tryon",
+        })
+      : buildCatVtonWorkflow({
+          personFilename,
+          clothFilename,
+          catvtonPath,
+          sd15InpaintPath,
+          vaePath,
+          mixedPrecision,
+          clothType,
+          seed: Math.floor(Math.random() * 100000),
+          steps: tryonSteps,
+          cfg: tryonCfg,
+          filenamePrefix: "tryon",
+        });
 
     const queueResult = await client.queuePrompt(workflow);
     const result = await client.waitForCompletion(queueResult.prompt_id, 600000);
     const imageBuffer = await client.getImage(result.filename, result.subfolder, "output");
 
-    const base64 = Buffer.from(imageBuffer).toString("base64");
-    const dataUrl = `data:image/png;base64,${base64}`;
-
     return {
-      imageUrl: dataUrl,
+      imageBuffer,
+      imageMimeType: "image/png",
       promptId: queueResult.prompt_id,
     };
   });
@@ -908,6 +1078,86 @@ export const startJobWorkers = () => {
       await addJobLog(queueName, parsed.jobId, `Job started (attempt ${parsed.attempt + 1}/${parsed.maxAttempts})`);
 
       const result = await handler(parsed.data);
+
+      // ── Guarantee: result.imageUrl must be a disk URL, NEVER base64 ──
+      // If handler returned raw imageBuffer, save to disk first
+      if (result?.imageBuffer) {
+        const mimeType = result.imageMimeType || "image/png";
+        const context = queueName === AI_QUEUE_NAME ? "ai" : "tryon";
+        try {
+          const buf = Buffer.isBuffer(result.imageBuffer) ? result.imageBuffer : Buffer.from(result.imageBuffer);
+          const stored = await storeBuffer(buf, mimeType, `${context}-${parsed.jobId}`);
+          result.imageUrl = stored.url;
+        } catch (saveErr) {
+          // Fallback: write directly with fs
+          const { writeFile, mkdir } = await import("fs/promises");
+          const { join } = await import("path");
+          const storageDir = process.env.ASSET_STORAGE_DIR || join(process.cwd(), "storage", "assets");
+          await mkdir(storageDir, { recursive: true });
+          const ext = mimeType.includes("png") ? "png" : "jpg";
+          const fileName = `${context}-${parsed.jobId}.${ext}`;
+          const filePath = join(storageDir, fileName);
+          const fallbackBuf = Buffer.isBuffer(result.imageBuffer) ? result.imageBuffer : Buffer.from(result.imageBuffer);
+          await writeFile(filePath, fallbackBuf);
+          result.imageUrl = `/assets/${fileName}`;
+          logWarn("worker_image_save_fallback", { queue: queueName, jobId: parsed.jobId });
+        }
+        delete result.imageBuffer;
+        delete result.imageMimeType;
+      }
+
+      // Legacy safety: if result still has a data URL (shouldn't happen now), convert it
+      if (result?.imageUrl && typeof result.imageUrl === "string" && result.imageUrl.startsWith("data:")) {
+        try {
+          const context = queueName === AI_QUEUE_NAME ? "ai" : "tryon";
+          const stored = context === "ai"
+            ? await saveAiResult(result.imageUrl, parsed.jobId)
+            : await saveTryOnResult(result.imageUrl, parsed.jobId);
+          if (stored) result.imageUrl = stored.url;
+        } catch (e) {
+          result.imageUrl = `/assets/placeholder-${parsed.jobId}.png`;
+          logWarn("worker_legacy_dataurl_fallback", { queue: queueName, jobId: parsed.jobId });
+        }
+      }
+
+      // For virtual-tryon jobs: persist to DB
+      if (queueName === TRYON_QUEUE_NAME && result?.imageUrl) {
+        try {
+          const clothType = parsed.data?.clothType || null;
+          await getDbPool().query(
+            `INSERT INTO virtual_tryon_results (job_id, result_image_url, cloth_type)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (job_id) DO NOTHING`,
+            [parsed.jobId, result.imageUrl, clothType]
+          );
+        } catch (dbErr) {
+          logWarn("worker_tryon_db_persist_failed", {
+            queue: queueName,
+            jobId: parsed.jobId,
+            error: dbErr instanceof Error ? dbErr.message : String(dbErr),
+          });
+        }
+      }
+
+      // For AI image jobs: persist to DB
+      if (queueName === AI_QUEUE_NAME && result?.imageUrl) {
+        try {
+          const prompt = parsed.data?.prompt || null;
+          const style = parsed.data?.style || null;
+          await getDbPool().query(
+            `INSERT INTO ai_image_results (job_id, result_image_url, prompt, style)
+             VALUES ($1, $2, $3, $4)
+             ON CONFLICT (job_id) DO NOTHING`,
+            [parsed.jobId, result.imageUrl, prompt, style]
+          );
+        } catch (dbErr) {
+          logWarn("worker_ai_db_persist_failed", {
+            queue: queueName,
+            jobId: parsed.jobId,
+            error: dbErr instanceof Error ? dbErr.message : String(dbErr),
+          });
+        }
+      }
 
       await updateJobState(queueName, parsed.jobId, {
         state: "completed",

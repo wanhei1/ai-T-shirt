@@ -13,7 +13,9 @@ declare global {
 const secretKey = process.env.JWT_SECRET || 'your_secret_key';
 
 export const authenticate = (req: Request, res: Response, next: NextFunction) => {
-    const token = req.headers['authorization']?.split(' ')[1];
+    // Support both Authorization header and ?token= query param (for <img> tags that can't send headers)
+    const token = req.headers['authorization']?.split(' ')[1]
+        || (typeof req.query.token === 'string' ? req.query.token : undefined);
 
     if (!token) {
         return res.status(401).json({ message: 'No token provided' });

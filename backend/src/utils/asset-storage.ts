@@ -77,7 +77,7 @@ const shouldExternalize = (mimeType: string, sizeBytes: number, minBytes: number
   return sizeBytes >= minBytes;
 };
 
-const storeBuffer = async (buffer: Buffer, mimeType: string, context: string): Promise<StoredAssetRef> => {
+export const storeBuffer = async (buffer: Buffer, mimeType: string, context: string): Promise<StoredAssetRef> => {
   const checksumSha256 = createHash('sha256').update(buffer).digest('hex');
   const ext = mimeToExt(mimeType);
   const datePrefix = new Date().toISOString().slice(0, 10).replace(/-/g, '');
@@ -107,6 +107,33 @@ const normalizeContext = (context?: string) => {
 
 const isPlainObject = (input: unknown): input is Record<string, unknown> => {
   return Boolean(input) && typeof input === 'object' && !Array.isArray(input);
+};
+
+export const saveTryOnResult = async (
+  dataUrl: string,
+  jobId: string | number
+): Promise<StoredAssetRef | null> => {
+  const parsed = parseDataUrl(dataUrl);
+  if (!parsed) return null;
+  return storeBuffer(parsed.buffer, parsed.mimeType, `tryon-${jobId}`);
+};
+
+export const saveAiResult = async (
+  dataUrl: string,
+  jobId: string | number
+): Promise<StoredAssetRef | null> => {
+  const parsed = parseDataUrl(dataUrl);
+  if (!parsed) return null;
+  return storeBuffer(parsed.buffer, parsed.mimeType, `ai-${jobId}`);
+};
+
+export const saveInputImage = async (
+  dataUrl: string,
+  context: string
+): Promise<StoredAssetRef | null> => {
+  const parsed = parseDataUrl(dataUrl);
+  if (!parsed) return null;
+  return storeBuffer(parsed.buffer, parsed.mimeType, context);
 };
 
 export const externalizeImageDataUrls = async <T>(

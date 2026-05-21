@@ -11,7 +11,8 @@ import { Input } from "@/components/ui/input"
 import { Badge } from "@/components/ui/badge"
 import { Progress } from "@/components/ui/progress"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { Sparkles, Loader2, Download, Palette } from "lucide-react"
+import { Sparkles, Loader2, Download, Palette, Settings, Globe, X } from "lucide-react"
+import { Switch } from "@/components/ui/switch"
 import Link from "next/link"
 import { useLanguage, type LanguageText } from "@/contexts/language-context"
 import apiClient, { type ApiClientError } from "@/lib/api-client"
@@ -19,6 +20,7 @@ import { pollJobUntilDone } from "@/lib/job-polling"
 
 interface AIGeneratorProps {
   onImageGenerated: (imageUrl: string) => void
+  compact?: boolean
 }
 
 const promptSuggestions: LanguageText[] = [
@@ -87,7 +89,7 @@ const modelOptions: Array<{ value: string; label: string }> = [
   { value: "RealVisXL_V5.0.safetensors", label: "RealVisXL V5" },
 ]
 
-export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
+export function AIGenerator({ onImageGenerated, compact }: AIGeneratorProps) {
   const { translate, language } = useLanguage()
   const [prompt, setPrompt] = useState("")
   const [style, setStyle] = useState("realistic")
@@ -119,6 +121,71 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
   })
   const [selectedModelOption, setSelectedModelOption] = useState(advanced.modelName)
   const activePollControllerRef = useRef<AbortController | null>(null)
+
+  // API mode state
+  type ApiProvider = "openai" | "anthropic"
+  type ApiSettings = { provider: ApiProvider; baseUrl: string; apiKey: string; model: string }
+
+  const API_SETTINGS_KEY = "aiGeneratorApiSettingsV1"
+  const API_MODE_KEY = "aiGeneratorModeV1"
+
+  const [apiMode, setApiMode] = useState<"local" | "api">(() => {
+    if (typeof window === "undefined") return "local"
+    return (window.localStorage.getItem(API_MODE_KEY) as "local" | "api") || "local"
+  })
+
+  const [showApiSettings, setShowApiSettings] = useState(false)
+  const [apiSettings, setApiSettings] = useState<ApiSettings>(() => {
+    if (typeof window === "undefined") return { provider: "openai", baseUrl: "", apiKey: "", model: "dall-e-3" }
+    try {
+      const raw = window.localStorage.getItem(API_SETTINGS_KEY)
+      if (raw) return JSON.parse(raw) as ApiSettings
+    } catch { /* ignore */ }
+    return { provider: "openai", baseUrl: "", apiKey: "", model: "dall-e-3" }
+  })
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    window.localStorage.setItem(API_MODE_KEY, apiMode)
+  }, [apiMode])
+
+  useEffect(() => {
+    if (typeof window === "undefined") return
+    window.localStorage.setItem(API_SETTINGS_KEY, JSON.stringify(apiSettings))
+  }, [apiSettings])
+
+  const generateImageViaApi = async (): Promise<string> => {
+    const { provider, baseUrl, apiKey, model } = apiSettings
+    if (!apiKey.trim()) throw new Error(translate({ zh: "请先配置 API Key", en: "Please configure API Key first" }))
+
+    const cleanedPrompt = prompt.trim()
+    const styleTemplate = stylePromptTemplates[style] || stylePromptTemplates.realistic
+    const finalPrompt = `${cleanedPrompt}, ${styleTemplate.positive}`
+
+    // Use server-side proxy to avoid CORS issues
+    const resp = await fetch("/api/external-ai-image", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        provider,
+        baseUrl: baseUrl.trim(),
+        apiKey: apiKey.trim(),
+        model,
+        prompt: finalPrompt,
+        width: advanced.width,
+        height: advanced.height,
+      }),
+    })
+
+    if (!resp.ok) {
+      const errData = await resp.json().catch(() => ({ error: `HTTP ${resp.status}` }))
+      throw new Error(errData.details || errData.error || `API error ${resp.status}`)
+    }
+
+    const data = await resp.json() as { imageUrl?: string; error?: string }
+    if (data.imageUrl) return data.imageUrl
+    throw new Error(data.error || translate({ zh: "API 未返回图片", en: "API returned no image" }))
+  }
 
   useEffect(() => {
     const hasPreset = modelOptions.some((option) => option.value === advanced.modelName)
@@ -241,7 +308,7 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
     setIsGenerating(true)
     setError(null)
     setQueueHint(null)
-    setGenerationProgress("正在排队...")
+    setGenerationProgress(apiMode === "api" ? "正在调用 API..." : "正在排队...")
     setGenerationPercent(5)
 
     activePollControllerRef.current?.abort()
@@ -249,6 +316,18 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
     activePollControllerRef.current = pollController
     
     try {
+      let transparentImageUrl: string
+
+      if (apiMode === "api") {
+        // API mode: call external API directly
+        setGenerationProgress(translate({ zh: "正在调用外部 API...", en: "Calling external API..." }))
+        setGenerationPercent(30)
+        const rawImageUrl = await generateImageViaApi()
+        setGenerationPercent(70)
+        setGenerationProgress(translate({ zh: "正在去除背景...", en: "Removing background..." }))
+        transparentImageUrl = await removeBackgroundToTransparent(rawImageUrl).catch(() => rawImageUrl)
+      } else {
+        // Local mode: use ComfyUI
       setGenerationProgress("正在提交任务...")
 
       const cleanedPrompt = prompt.trim()
@@ -294,7 +373,13 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
         queue,
         jobId,
         fetchStatus: apiClient.getJobStatus.bind(apiClient),
-        getResult: (job) => job?.result?.imageUrl as string | undefined,
+        getResult: (job) => {
+          const r = job?.result;
+          if (!r) return undefined;
+          if (typeof r === 'string') return r;
+          if (typeof r === 'object' && r.imageUrl) return r.imageUrl;
+          return undefined;
+        },
         getFailedReason: (job) => job?.failedReason as string | undefined,
         timeoutMs: 8 * 60 * 1000,
         timeoutMessage: "任务等待超时，请稍后重试",
@@ -308,7 +393,8 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
       })
 
       setGenerationProgress("正在去除背景...")
-      const transparentImageUrl = await removeBackgroundToTransparent(imageUrl).catch(() => imageUrl)
+      transparentImageUrl = await removeBackgroundToTransparent(imageUrl).catch(() => imageUrl)
+      }
 
       setErrorAction(null)
       setGenerationProgress("生成完成！")
@@ -398,17 +484,117 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
 
   return (
     <div className="space-y-4">
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base flex items-center gap-2">
+      <Card className={compact ? "border-0 shadow-none" : ""}>
+        <CardHeader className={compact ? "p-0 pb-2" : ""}>
+          <CardTitle className={`${compact ? "text-sm" : "text-base"} flex items-center gap-2`}>
             <Sparkles className="w-4 h-4" />
             {translate({ zh: "AI 文生图", en: "AI Image Generator" })}
+            <div className="ml-auto flex items-center gap-2">
+              <span className={`text-xs ${apiMode === "local" ? "text-primary font-medium" : "text-muted-foreground"}`}>
+                {translate({ zh: "本地", en: "Local" })}
+              </span>
+              <Switch
+                checked={apiMode === "api"}
+                onCheckedChange={(checked) => setApiMode(checked ? "api" : "local")}
+              />
+              <span className={`text-xs ${apiMode === "api" ? "text-primary font-medium" : "text-muted-foreground"}`}>
+                API
+              </span>
+            </div>
           </CardTitle>
-          <CardDescription>
-            {translate({ zh: "用文字描述你想要的图案，交给 AI 生成", en: "Describe your vision and let AI create it for you" })}
-          </CardDescription>
+          {!compact && (
+            <CardDescription>
+              {translate({ zh: "用文字描述你想要的图案，交给 AI 生成", en: "Describe your vision and let AI create it for you" })}
+            </CardDescription>
+          )}
         </CardHeader>
-        <CardContent className="space-y-4">
+        <CardContent className={compact ? "space-y-3 p-0 pt-2" : "space-y-4"}>
+          {apiMode === "api" && (
+            <div className="rounded-md border p-3 space-y-3 bg-muted/30">
+              <div className="flex items-center justify-between">
+                <Label className="flex items-center gap-1.5 text-sm font-medium">
+                  <Globe className="w-3.5 h-3.5" />
+                  {translate({ zh: "API 配置", en: "API Configuration" })}
+                </Label>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 px-2"
+                  onClick={() => setShowApiSettings((v) => !v)}
+                >
+                  <Settings className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label className="text-xs">{translate({ zh: "接口格式", en: "Format" })}</Label>
+                  <Select
+                    value={apiSettings.provider}
+                    onValueChange={(v) => {
+                      const provider = v as ApiProvider
+                      setApiSettings((prev) => ({
+                        ...prev,
+                        provider,
+                        model: provider === "openai" ? "dall-e-3" : "claude-sonnet-4-20250514",
+                      }))
+                    }}
+                  >
+                    <SelectTrigger className="h-8 text-xs mt-1">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="openai">OpenAI</SelectItem>
+                      <SelectItem value="anthropic">Anthropic</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label className="text-xs">{translate({ zh: "模型", en: "Model" })}</Label>
+                  <Input
+                    className="h-8 text-xs mt-1"
+                    value={apiSettings.model}
+                    onChange={(e) => setApiSettings((prev) => ({ ...prev, model: e.target.value }))}
+                    placeholder={apiSettings.provider === "openai" ? "dall-e-3" : "claude-sonnet-4-20250514"}
+                  />
+                </div>
+              </div>
+
+              {showApiSettings && (
+                <div className="space-y-2 pt-2 border-t">
+                  <div>
+                    <Label className="text-xs">{translate({ zh: "API 地址", en: "Base URL" })}</Label>
+                    <Input
+                      className="h-8 text-xs mt-1"
+                      value={apiSettings.baseUrl}
+                      onChange={(e) => setApiSettings((prev) => ({ ...prev, baseUrl: e.target.value }))}
+                      placeholder={apiSettings.provider === "openai"
+                        ? "https://api.openai.com"
+                        : "https://api.anthropic.com"}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs">API Key</Label>
+                    <Input
+                      className="h-8 text-xs mt-1"
+                      type="password"
+                      value={apiSettings.apiKey}
+                      onChange={(e) => setApiSettings((prev) => ({ ...prev, apiKey: e.target.value }))}
+                      placeholder="sk-..."
+                    />
+                  </div>
+                </div>
+              )}
+
+              {!showApiSettings && apiSettings.apiKey && (
+                <p className="text-xs text-muted-foreground">
+                  ✓ {translate({ zh: "已配置", en: "Configured" })} · {apiSettings.provider === "openai" ? "OpenAI" : "Anthropic"} · {apiSettings.model}
+                </p>
+              )}
+            </div>
+          )}
+
           <div>
             <Label htmlFor="ai-prompt">
               {translate({ zh: "描述你的设计", en: "Describe your design" })}
@@ -419,13 +605,15 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               onKeyDown={handleKeyPress}
-              rows={3}
+              rows={compact ? 2 : 3}
               className="mt-1"
               disabled={isGenerating}
             />
-            <p className="text-xs text-muted-foreground mt-1">
-              {translate({ zh: "按 Ctrl+Enter 生成", en: "Press Ctrl+Enter to generate" })}
-            </p>
+            {!compact && (
+              <p className="text-xs text-muted-foreground mt-1">
+                {translate({ zh: "按 Ctrl+Enter 生成", en: "Press Ctrl+Enter to generate" })}
+              </p>
+            )}
           </div>
 
           {/* 错误显示 */}
@@ -487,7 +675,7 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
                   <SelectItem key={option.value} value={option.value}>
                     <div>
                       <div className="font-medium">{translate(option.label)}</div>
-                      <div className="text-xs text-muted-foreground">{translate(option.description)}</div>
+                      {!compact && <div className="text-xs text-muted-foreground">{translate(option.description)}</div>}
                     </div>
                   </SelectItem>
                 ))}
@@ -496,6 +684,8 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
           </div>
 
           <div className="space-y-2">
+            {apiMode === "local" && (
+            <>
             <Button type="button" variant="outline" className="w-full" onClick={() => setShowAdvanced((v) => !v)}>
               {showAdvanced
                 ? translate({ zh: "收起高级参数", en: "Hide Advanced Controls" })
@@ -621,15 +811,17 @@ export function AIGenerator({ onImageGenerated }: AIGeneratorProps) {
                 <div className="col-span-2">
                   <Label>
                     {translate({ zh: "负向提示词（可选）", en: "Negative Prompt (Optional)" })}
-                  </Label>
-                  <Input
-                    type="text"
-                    value={advanced.negativePrompt}
-                    onChange={(e) => setAdvanced((prev) => ({ ...prev, negativePrompt: e.target.value }))}
-                  />
-                </div>
-              </div>
-            ) : null}
+                 </Label>
+                 <Input
+                   type="text"
+                   value={advanced.negativePrompt}
+                   onChange={(e) => setAdvanced((prev) => ({ ...prev, negativePrompt: e.target.value }))}
+                 />
+               </div>
+             </div>
+           ) : null}
+            </>
+            )}
           </div>
 
           <Button onClick={generateImage} disabled={!prompt.trim() || isGenerating} className="w-full">
