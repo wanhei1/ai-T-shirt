@@ -104,3 +104,16 @@ backend/storage/migration-backups/
 # large binary archives
 *.rar
 *.sql.gz
+
+# Development logs & docs (local only)
+LOG-*.md
+docs/development-log-*.md
+docs/archive/
+docs/architecture/
+shared/
+
+# Local scripts
+backend/scripts/
+scripts/
+docs-archive/
+docs/*.md
