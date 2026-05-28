@@ -56,6 +56,28 @@ const createPoolFromCandidates = async (candidates: string[], label: string) => 
     );
 };
 
+const DB_RETRY_ATTEMPTS = Math.max(1, Number.parseInt(process.env.DB_RETRY_ATTEMPTS || '5', 10) || 5);
+const DB_RETRY_BASE_DELAY_MS = Math.max(1000, Number.parseInt(process.env.DB_RETRY_BASE_DELAY_MS || '3000', 10) || 3000);
+
+const connectWithRetry = async (candidates: string[], label: string): Promise<Pool> => {
+    let lastError: unknown = null;
+    for (let attempt = 1; attempt <= DB_RETRY_ATTEMPTS; attempt++) {
+        try {
+            return await createPoolFromCandidates(candidates, label);
+        } catch (error) {
+            lastError = error;
+            const delay = DB_RETRY_BASE_DELAY_MS * Math.min(attempt, 5); // cap backoff at 5x
+            console.warn(
+                `⚠️ ${label} database connection attempt ${attempt}/${DB_RETRY_ATTEMPTS} failed, retrying in ${delay / 1000}s...`
+            );
+            if (attempt < DB_RETRY_ATTEMPTS) {
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+    }
+    throw lastError instanceof Error ? lastError : new Error(`${label} database connection failed after ${DB_RETRY_ATTEMPTS} attempts`);
+};
+
 const connectToDatabase = async () => {
     const candidates = parseCandidates(
         process.env.DATABASE_URLS,
@@ -63,7 +85,7 @@ const connectToDatabase = async () => {
         []
     );
 
-    return createPoolFromCandidates(candidates, 'primary');
+    return connectWithRetry(candidates, 'primary');
 };
 
 export const connectToReadDatabase = async (): Promise<Pool | null> => {

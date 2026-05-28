@@ -383,6 +383,8 @@ const initializeApp = async () => {
     let dependencyMetricsTimer: NodeJS.Timeout | null = null;
     let billingReconciliationTimer: NodeJS.Timeout | null = null;
 
+    const DB_RECONNECT_INTERVAL_MS = Math.max(5000, Number.parseInt(process.env.DB_RECONNECT_INTERVAL_MS || '30000', 10) || 30000);
+
     try {
         // 尝试连接数据库
         try {
@@ -402,6 +404,28 @@ const initializeApp = async () => {
             console.log(`📝 Database error: ${dbError?.message || 'Unknown error'}`);
             console.log('💡 To enable full features, please configure your DATABASE_URL environment variable');
             dbConnectedState = false;
+        }
+
+        // 如果启动时数据库没连上，启动后台重连循环
+        let dbReconnectTimer: NodeJS.Timeout | null = null;
+        if (!pool) {
+            dbReconnectTimer = setInterval(async () => {
+                try {
+                    const newPool = await connectToDatabase();
+                    pool = newPool;
+                    dbConnected = true;
+                    dbConnectedState = true;
+                    console.log('✅ Database reconnected (background retry succeeded)');
+                    // 用新 pool 重新注册路由
+                    app.use('/api', createRoutes(pool, readPool));
+                    if (dbReconnectTimer) {
+                        clearInterval(dbReconnectTimer);
+                        dbReconnectTimer = null;
+                    }
+                } catch {
+                    // 静默重试，不刷日志（依赖监控已经会报）
+                }
+            }, DB_RECONNECT_INTERVAL_MS);
         }
 
         // 设置 API 路由（传入数据库连接池，如果连接失败则为 null）

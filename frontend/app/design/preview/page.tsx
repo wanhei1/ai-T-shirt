@@ -483,7 +483,13 @@ export default function PreviewPage() {
       queue,
       jobId,
       fetchStatus: apiClient.getJobStatus.bind(apiClient),
-      getResult: (job) => job?.result?.imageUrl as string | undefined,
+        getResult: (job) => {
+          const r = job?.result;
+          if (!r) return undefined;
+          if (typeof r === 'string') return r;
+          if (typeof r === 'object' && r.imageUrl) return r.imageUrl;
+          return undefined;
+        },
       getFailedReason: (job) => job?.failedReason as string | undefined,
       timeoutMs: 10 * 60 * 1000,
       timeoutMessage: "试穿任务等待超时，请稍后重试",

@@ -69,7 +69,7 @@ function OrderImage({
   useEffect(() => {
     if (!src || !auth) return;
     let cancelled = false;
-    const token = localStorage.getItem("token");
+    const token = localStorage.getItem("authToken") || localStorage.getItem("token");
     if (!token) {
       setState("error");
       return;

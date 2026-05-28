@@ -7,6 +7,7 @@ module.exports = {
       interpreter: 'node',
       autorestart: true,
       max_memory_restart: '200M',
+      env: { NODE_ENV: 'production' },
     },
     {
       name: 'tshirt-frontend',
@@ -16,6 +17,7 @@ module.exports = {
       interpreter: '/usr/bin/node',
       autorestart: true,
       max_memory_restart: '300M',
+      env: { NODE_ENV: 'production' },
     },
     {
       name: 'tshirt-worker',
@@ -24,6 +26,7 @@ module.exports = {
       interpreter: 'node',
       autorestart: true,
       max_memory_restart: '300M',
+      env: { NODE_ENV: 'production' },
     },
   ],
 };
