@@ -18,15 +18,13 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { AuthGuard } from "@/components/auth/auth-guard";
 import { Separator } from "@/components/ui/separator";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { MyDesigns } from "@/components/profile/my-designs";
 import {
-  ChevronDown,
-  ChevronUp,
   Calendar,
   Copy,
   Crown,
   Edit,
   Gift,
-  ImageIcon,
   Loader2,
   Mail,
   Save,
@@ -45,39 +43,6 @@ type MembershipRecord = {
   transaction_id?: string | null;
   balance?: number;
   currency?: string;
-};
-
-type OrderRecord = {
-  id: string | number;
-  created_at: string;
-  total: number | string;
-  status: string;
-  payment_status?: string;
-  payment_channel?: string | null;
-  payment_order_id?: string | null;
-  paid_at?: string | null;
-  has_front_image?: boolean | null;
-  has_back_image?: boolean | null;
-};
-
-type TrackingRecord = {
-  orderId: number;
-  orderStatus: string;
-  shipment: {
-    id: number;
-    orderId: number;
-    carrier: string;
-    trackingNo: string;
-    status: string;
-    shippedAt: string | null;
-    deliveredAt: string | null;
-    updatedAt: string | null;
-  } | null;
-  timeline: Array<{
-    key: string;
-    label: string;
-    time: string | null;
-  }>;
 };
 
 type ReferralMe = {
@@ -101,10 +66,6 @@ export default function ProfilePage() {
     type: "success" | "error";
     text: string;
   } | null>(null);
-  const [orders, setOrders] = useState<OrderRecord[] | null>(null);
-  const [orderTrackingMap, setOrderTrackingMap] = useState<Record<number, TrackingRecord>>({});
-  const [expandedTrackingOrderId, setExpandedTrackingOrderId] = useState<number | null>(null);
-  const [trackingLoadingOrderId, setTrackingLoadingOrderId] = useState<number | null>(null);
   const [membership, setMembership] = useState<MembershipRecord | null>(null);
   const [isLoadingMembership, setIsLoadingMembership] = useState(true);
 
@@ -278,21 +239,6 @@ export default function ProfilePage() {
   };
 
   useEffect(() => {
-    const fetchOrders = async () => {
-      try {
-        const { apiClient } = await import("@/lib/api-client");
-        const response = await apiClient.getOrderSummaries(30);
-        setOrders(response.orders || []);
-      } catch (error) {
-        console.warn("Failed to fetch orders", error);
-        setOrders([]);
-      }
-    };
-
-    fetchOrders();
-  }, []);
-
-  useEffect(() => {
     const fetchMembership = async () => {
       try {
         setIsLoadingMembership(true);
@@ -453,61 +399,29 @@ export default function ProfilePage() {
       }
     );
 
-  const formatTimelineTime = (value: string | null | undefined) => {
-    if (!value) return translate({ zh: "时间待更新", en: "Pending update" });
-    const date = new Date(value);
-    if (Number.isNaN(date.getTime())) return value;
-    return date.toLocaleString(translate({ zh: "zh-CN", en: "en-US" }));
-  };
-
-  const handleToggleTracking = async (orderIdRaw: string | number) => {
-    const orderId = Number(orderIdRaw);
-    if (!Number.isFinite(orderId) || orderId <= 0) return;
-
-    if (expandedTrackingOrderId === orderId) {
-      setExpandedTrackingOrderId(null);
-      return;
-    }
-
-    if (!orderTrackingMap[orderId]) {
-      try {
-        setTrackingLoadingOrderId(orderId);
-        const { apiClient } = await import("@/lib/api-client");
-        const tracking = await apiClient.getOrderTracking(orderId);
-        setOrderTrackingMap((prev) => ({ ...prev, [orderId]: tracking }));
-      } catch (error) {
-        console.warn("Failed to fetch order tracking", error);
-        setOrderTrackingMap((prev) => ({
-          ...prev,
-          [orderId]: {
-            orderId,
-            orderStatus: "pending",
-            shipment: null,
-            timeline: [],
-          },
-        }));
-      } finally {
-        setTrackingLoadingOrderId(null);
-      }
-    }
-
-    setExpandedTrackingOrderId(orderId);
-  };
-
   return (
     <AuthGuard requireAuth>
-      <div className="min-h-screen bg-background p-4">
-        <div className="container mx-auto max-w-4xl">
-          <div className="mb-8">
-            <h1 className="mb-2 text-3xl font-bold text-foreground">
-              {translate({ zh: "个人资料", en: "Profile" })}
-            </h1>
-            <p className="text-muted-foreground">
-              {translate({
-                zh: "管理您的账户信息和偏好设置",
-                en: "Manage your account information and preferences",
-              })}
-            </p>
+      <div className="min-h-screen">
+        <div className="yituai-page-shell max-w-5xl">
+          <div
+            className="yituai-bleed-hero mb-10"
+            style={{ backgroundImage: "url(/home-shanhaijing/customer-story.png)" }}
+          >
+            <div className="yituai-bleed-content">
+              <div className="yituai-bleed-copy">
+                <span className="yituai-seal">我</span>
+                <p className="yituai-kicker mt-8">Profile</p>
+                <h1 className="yituai-display mt-3">
+                  {translate({ zh: "你的衣台档案", en: "Your YITUAI profile" })}
+                </h1>
+                <p className="mt-6 text-lg leading-8">
+                  {translate({
+                    zh: "管理账户、会员、邀请、订单和个人作品库。所有内容保持原功能，只统一成主页的服装品牌视觉。",
+                    en: "Manage account, membership, referrals, orders, and personal designs in the same apparel-first visual system.",
+                  })}
+                </p>
+              </div>
+            </div>
           </div>
 
           {message && (
@@ -916,17 +830,23 @@ export default function ProfilePage() {
               <CardContent className="space-y-4">
                 <div className="rounded-lg border p-4">
                   <h4 className="mb-2 font-semibold">
-                    {translate({ zh: "设计历史", en: "Design History" })}
+                    {translate({ zh: "我的作品", en: "My Designs" })}
                   </h4>
                   <p className="mb-3 text-sm text-muted-foreground">
                     {translate({
-                      zh: "查看您创建的所有T恤设计",
-                      en: "View all your T-shirt designs",
+                      zh: "管理你的所有设计作品，支持编辑、开团和收藏",
+                      en: "Manage all your designs — edit, order, or favorite",
                     })}
                   </p>
-                  <Button variant="outline" disabled>
-                    {translate({ zh: "即将推出", en: "Coming Soon" })}
-                  </Button>
+                  <MyDesigns
+                    onEdit={(design) => {
+                      // 加载作品数据到 localStorage，跳转编辑器
+                      window.location.href = `/design/editor?fromDesign=${design.id}`;
+                    }}
+                    onOrder={(design) => {
+                      window.location.href = `/design/editor?fromDesign=${design.id}&action=order`;
+                    }}
+                  />
                 </div>
 
                 <div className="rounded-lg border p-4">
@@ -935,110 +855,15 @@ export default function ProfilePage() {
                   </h4>
                   <p className="mb-3 text-sm text-muted-foreground">
                     {translate({
-                      zh: "查看您的订购历史和状态",
-                      en: "View your order history and status",
+                      zh: "查看全部订单、生产进度、物流和售后入口",
+                      en: "View all orders, production progress, tracking, and support",
                     })}
                   </p>
-                  {orders === null ? (
-                    <p className="text-sm text-muted-foreground">
-                      {translate({ zh: "加载中...", en: "Loading..." })}
-                    </p>
-                  ) : orders.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">
-                      {translate({ zh: "暂无订单", en: "No orders yet" })}
-                    </p>
-                  ) : (
-                    <div className="space-y-3">
-                      {orders.map((order) => (
-                        <div
-                          key={order.id}
-                          className="flex items-center gap-4 rounded-lg border p-3"
-                        >
-                          {order.has_front_image ? (
-                            <div className="flex h-16 w-16 items-center justify-center rounded bg-muted">
-                              <ImageIcon className="h-6 w-6 text-muted-foreground" />
-                            </div>
-                          ) : (
-                            <div className="flex h-16 w-16 items-center justify-center rounded bg-muted text-xs font-medium">
-                              {translate({ zh: "无预览", en: "No preview" })}
-                            </div>
-                          )}
-                          <div className="flex-1">
-                              <div className="flex justify-between">
-                                <div>
-                                  <div className="font-medium">
-                                    {translate({ zh: "订单号", en: "Order" })} #{order.id}
-                                  </div>
-                                  <div className="text-xs text-muted-foreground">
-                                    {new Date(order.created_at).toLocaleString()}
-                                  </div>
-                                </div>
-                                <div className="text-right">
-                                  <div className="font-semibold">
-                                    ¥{Number(order.total).toFixed(2)}
-                                  </div>
-                                  <div className="text-xs text-muted-foreground">
-                                    {order.status}
-                                  </div>
-                                  <div className="text-xs text-muted-foreground">
-                                    {order.payment_status === "pending"
-                                      ? translate({ zh: "待支付", en: "Pending Payment" })
-                                      : order.payment_status === "paid"
-                                      ? translate({ zh: "已支付", en: "Paid" })
-                                      : order.payment_status || translate({ zh: "支付状态未知", en: "Payment Status Unknown" })}
-                                  </div>
-                                </div>
-                              </div>
-                              <div className="mt-2 text-sm text-muted-foreground">
-                                {translate({ zh: "订单", en: "Order" })} #{order.id}
-                              </div>
-                              <div className="mt-3">
-                                <Button
-                                  type="button"
-                                  variant="outline"
-                                  size="default"
-                                  onClick={() => handleToggleTracking(order.id)}
-                                  disabled={trackingLoadingOrderId === Number(order.id)}
-                                >
-                                  {trackingLoadingOrderId === Number(order.id)
-                                    ? translate({ zh: "加载物流中...", en: "Loading tracking..." })
-                                    : expandedTrackingOrderId === Number(order.id)
-                                    ? translate({ zh: "收起物流", en: "Hide Tracking" })
-                                    : translate({ zh: "查看物流", en: "View Tracking" })}
-                                  {expandedTrackingOrderId === Number(order.id)
-                                    ? <ChevronUp className="ml-2 h-4 w-4" />
-                                    : <ChevronDown className="ml-2 h-4 w-4" />}
-                                </Button>
-                              </div>
-                              {expandedTrackingOrderId === Number(order.id) && (
-                                <div className="mt-3 rounded-md border bg-muted/30 p-3">
-                                  {orderTrackingMap[Number(order.id)]?.shipment ? (
-                                    <div className="mb-3 text-xs text-muted-foreground">
-                                      {translate({ zh: "物流公司", en: "Carrier" })}: {orderTrackingMap[Number(order.id)]?.shipment?.carrier ?? "—"}
-                                      {" · "}
-                                      {translate({ zh: "运单号", en: "Tracking No." })}: {orderTrackingMap[Number(order.id)]?.shipment?.trackingNo ?? "—"}
-                                    </div>
-                                  ) : (
-                                    <div className="mb-3 text-xs text-muted-foreground">
-                                      {translate({ zh: "暂未发货", en: "Not shipped yet" })}
-                                    </div>
-                                  )}
-                                  <div className="space-y-2">
-                                    {(orderTrackingMap[Number(order.id)]?.timeline || []).map((event) => (
-                                      <div key={event.key} className="flex items-center justify-between rounded border bg-background px-2 py-1 text-xs">
-                                        <span>{event.label}</span>
-                                        <span className="text-muted-foreground">{formatTimelineTime(event.time)}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        ))
-                      }
-                    </div>
-                  )}
+                  <Button asChild variant="outline" className="w-full justify-center rounded-full">
+                    <Link href="/orders">
+                      {translate({ zh: "查看全部订单", en: "View all orders" })}
+                    </Link>
+                  </Button>
                 </div>
 
                 <Separator />
@@ -1065,4 +890,3 @@ export default function ProfilePage() {
     </AuthGuard>
   );
 }
-
