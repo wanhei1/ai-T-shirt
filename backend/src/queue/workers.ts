@@ -49,6 +49,7 @@ const AI_CONCURRENCY = Number.parseInt(process.env.JOB_CONCURRENCY_AI || "1", 10
 const TRYON_CONCURRENCY = Number.parseInt(process.env.JOB_CONCURRENCY_TRYON || "1", 10);
 
 const COMFYUI_URL = process.env.COMFYUI_URL || "http://127.0.0.1:8188";
+const TRYON_COMFYUI_URL = process.env.TRYON_COMFYUI_URL || COMFYUI_URL;
 const COMFYUI_ROOT = process.env.COMFYUI_ROOT || path.join(process.cwd(), "ComfyUI");
 const DEFAULT_IMAGE_WORKFLOW_PATHS = [
   path.join(COMFYUI_ROOT, "user/default/workflows/imagegenerate_workflow.json"),
@@ -75,10 +76,10 @@ const styleConfigs: Record<string, {
     promptPrefix: "RAW photo, photorealistic, ultra detailed texture, realistic lighting, 8k uhd",
     promptSuffix: "professional color grading, studio lighting, crisp edges, clean separation",
     negativePrompt: "plastic skin, uncanny face, bad anatomy, deformed, extra limbs, overprocessed",
-    steps: 30,
-    cfg: 7.0,
-    samplerName: "dpmpp_2m",
-    scheduler: "karras",
+    steps: getEnvInt("COMFYUI_DEFAULT_STEPS", 30),
+    cfg: getEnvFloat("COMFYUI_DEFAULT_CFG", 7.0),
+    samplerName: getEnvString("COMFYUI_DEFAULT_SAMPLER", "dpmpp_2m"),
+    scheduler: getEnvString("COMFYUI_DEFAULT_SCHEDULER", "karras"),
   },
   cartoon: {
     promptPrefix: "cartoon illustration, clean lineart, bold outlines, cel shading",
@@ -888,7 +889,7 @@ async function runAiImageJob(payload: AIImageJobPayload) {
 
 async function runTryOnJob(payload: TryOnJobPayload) {
   return trackComfyUiMetrics("tryon", async () => {
-    const client = new SimpleComfyUIClient(COMFYUI_URL);
+    const client = new SimpleComfyUIClient(TRYON_COMFYUI_URL);
     const ok = await client.checkConnection();
     if (!ok) {
       throw new Error("ComfyUI 不可用");
@@ -903,7 +904,7 @@ async function runTryOnJob(payload: TryOnJobPayload) {
       queue: TRYON_QUEUE_NAME,
       operation: "tryon",
       activeServerUrl: active,
-      configuredUrls: COMFYUI_URL,
+      configuredUrls: TRYON_COMFYUI_URL,
       clothType: payload.clothType || null,
     });
 
@@ -1003,7 +1004,7 @@ async function runTryOnJob(payload: TryOnJobPayload) {
           filenamePrefix: "tryon",
         });
 
-    const queueResult = await client.queuePrompt(workflow);
+    const queueResult = await client.queuePrompt(workflow, { serverUrl: active });
     const result = await client.waitForCompletion(queueResult.prompt_id, 600000);
     const imageBuffer = await client.getImage(result.filename, result.subfolder, "output");
 
@@ -1155,6 +1156,42 @@ export const startJobWorkers = () => {
             queue: queueName,
             jobId: parsed.jobId,
             error: dbErr instanceof Error ? dbErr.message : String(dbErr),
+          });
+        }
+      }
+
+      // Auto-save to user_designs (个人作品库)
+      const userId = parsed.data?.userId;
+      if (userId && Number.isFinite(userId) && result?.imageUrl) {
+        try {
+          if (queueName === AI_QUEUE_NAME) {
+            const prompt = parsed.data?.prompt || null;
+            const style = parsed.data?.style || null;
+            const title = prompt ? String(prompt).slice(0, 120) : 'AI 生成图案';
+            await getDbPool().query(
+              `INSERT INTO user_designs
+               (user_id, title, category, thumbnail_front, source_type, source_job_id)
+               VALUES ($1, $2, $3, $4, 'ai_generate', $5)
+               ON CONFLICT DO NOTHING`,
+              [userId, title, style || null, result.imageUrl, parsed.jobId]
+            );
+          } else if (queueName === TRYON_QUEUE_NAME) {
+            const clothType = parsed.data?.clothType || null;
+            const title = clothType ? `试衣 (${clothType})` : '试衣图案';
+            await getDbPool().query(
+              `INSERT INTO user_designs
+               (user_id, title, category, thumbnail_front, source_type, source_job_id)
+               VALUES ($1, $2, $3, $4, 'tryon', $5)
+               ON CONFLICT DO NOTHING`,
+              [userId, title, clothType, result.imageUrl, parsed.jobId]
+            );
+          }
+        } catch (autoSaveErr) {
+          logWarn("worker_user_designs_autosave_failed", {
+            queue: queueName,
+            jobId: parsed.jobId,
+            userId,
+            error: autoSaveErr instanceof Error ? autoSaveErr.message : String(autoSaveErr),
           });
         }
       }

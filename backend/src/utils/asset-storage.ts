@@ -159,11 +159,7 @@ export const externalizeImageDataUrls = async <T>(
     }
 
     if (Array.isArray(node)) {
-      const transformed: unknown[] = [];
-      for (const item of node) {
-        transformed.push(await visit(item));
-      }
-      return transformed;
+      return Promise.all(node.map((item) => visit(item)));
     }
 
     if (isPlainObject(node)) {

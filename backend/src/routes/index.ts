@@ -4,6 +4,7 @@ import { readFile } from 'fs/promises';
 import path from 'path';
 import { AuthController } from '../controllers';
 import { UserModel, OrderModel, MembershipModel, AllDesignModel, CartModel } from '../models';
+import { createStoreRoutes } from './store-routes';
 import { authenticate, authenticateOptional } from '../middleware/auth';
 import { Pool } from 'pg';
 import { normalizeCategory } from '../utils/category';
@@ -41,7 +42,15 @@ const serveCanvasThumbnail = async (res: any, thumb: string) => {
         const storageDir = process.env.ASSET_STORAGE_DIR?.trim()
             || path.join(process.cwd(), 'storage', 'assets');
         const fileName = thumb.replace(/^\/assets\//, '');
-        const filePath = path.join(storageDir, fileName);
+        const generatedAssetName = /^[a-z0-9_-]+-\d{8}-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.(png|jpg|jpeg|webp|gif|svg|bin)$/i;
+        if (!generatedAssetName.test(fileName)) {
+            return res.status(404).json({ message: 'Invalid thumbnail file name' });
+        }
+        const resolvedStorageDir = path.resolve(storageDir);
+        const filePath = path.resolve(resolvedStorageDir, fileName);
+        if (!filePath.startsWith(`${resolvedStorageDir}${path.sep}`)) {
+            return res.status(404).json({ message: 'Invalid thumbnail path' });
+        }
         try {
             const buffer = await readFile(filePath);
             const ext = path.extname(fileName).toLowerCase();
@@ -176,6 +185,8 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
     const cartModel = new CartModel(pool);
     const cartReadModel = new CartModel(readPool || pool);
 
+    router.use(createStoreRoutes({ pool, readPool, authenticate }));
+
     // Ops: Alertmanager webhook -> generate incident ticket template file
     router.post('/ops/alerts/ticket', async (req, res) => {
         try {
@@ -295,6 +306,7 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
         orderSummary: ttlFromEnv('ORDERS_SUMMARY_CACHE_TTL_SECONDS', 20),
         orderList: ttlFromEnv('ORDERS_LIST_CACHE_TTL_SECONDS', 20),
         adminOrders: ttlFromEnv('ADMIN_ORDERS_CACHE_TTL_SECONDS', 10),
+        userDesignsList: ttlFromEnv('USER_DESIGNS_CACHE_TTL_SECONDS', 30),
     };
 
     const markCache = (route: string, result: 'hit' | 'miss' | 'store' | 'invalidate' | 'error') => {
@@ -398,6 +410,11 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
     const invalidateCartCache = async (userId?: number | null) => {
         if (!userId || !Number.isFinite(userId)) return;
         await safeInvalidatePrefix(`cart:list:${userId}:`, '/cart');
+    };
+
+    const invalidateUserDesignsCache = async (userId?: number | null) => {
+        if (!userId || !Number.isFinite(userId)) return;
+        await safeInvalidatePrefix(`user-designs:list:${userId}:`, '/user-designs');
     };
 
     const invalidateOrderCache = async (userId?: number | null) => {
@@ -846,13 +863,97 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
         return new Date(Date.now() + etaSeconds * 1000).toISOString();
     };
 
-    const baseMonthlyAmount = 198;
-    const discountRate = 0.85;
-    const membershipPlans: Record<string, { amount: number; currency: string; durationDays: number }> = {
-        monthly: { amount: baseMonthlyAmount, currency: 'CNY', durationDays: 30 },
-        quarterly: { amount: Number((baseMonthlyAmount * 3 * discountRate).toFixed(2)), currency: 'CNY', durationDays: 90 },
-        'half-year': { amount: Number((baseMonthlyAmount * 6 * discountRate).toFixed(2)), currency: 'CNY', durationDays: 180 },
-        yearly: { amount: Number((baseMonthlyAmount * 12 * discountRate).toFixed(2)), currency: 'CNY', durationDays: 365 }
+    const baseMonthlyAmount = 188;
+    const aiCreditCosts = {
+        localImage: 6,
+        localHdImage: 10,
+        virtualTryon: 12,
+        apiStandardImage: 28,
+        apiPremiumImage: 48
+    };
+    const membershipPlans: Record<string, { amount: number; clothingBalance: number; aiCredits: number; currency: string; durationDays: number; discountRate: number; label: string }> = {
+        monthly: { amount: baseMonthlyAmount, clothingBalance: baseMonthlyAmount, aiCredits: 300, currency: 'CNY', durationDays: 30, discountRate: 0, label: '月度会员' },
+        quarterly: { amount: Number((baseMonthlyAmount * 3 * 0.95).toFixed(2)), clothingBalance: Number((baseMonthlyAmount * 3 * 0.95).toFixed(2)), aiCredits: 945, currency: 'CNY', durationDays: 90, discountRate: 0.05, label: '季度会员' },
+        'half-year': { amount: Number((baseMonthlyAmount * 6 * 0.9).toFixed(2)), clothingBalance: Number((baseMonthlyAmount * 6 * 0.9).toFixed(2)), aiCredits: 1980, currency: 'CNY', durationDays: 180, discountRate: 0.1, label: '半年会员' },
+        yearly: { amount: Number((baseMonthlyAmount * 12 * 0.85).toFixed(2)), clothingBalance: Number((baseMonthlyAmount * 12 * 0.85).toFixed(2)), aiCredits: 4140, currency: 'CNY', durationDays: 365, discountRate: 0.15, label: '年度会员' }
+    };
+
+    const getMembershipPlanEquivalents = (aiCredits: number) => ({
+        localImages: Math.floor(aiCredits / aiCreditCosts.localImage),
+        tryOns: Math.floor(aiCredits / aiCreditCosts.virtualTryon),
+        apiStandardImages: Math.floor(aiCredits / aiCreditCosts.apiStandardImage)
+    });
+
+    const getAiCreditCostForJob = (operation: typeof AI_QUEUE_NAME | typeof TRYON_QUEUE_NAME, payload?: any) => {
+        if (operation === TRYON_QUEUE_NAME) return { credits: aiCreditCosts.virtualTryon, operation: 'virtual-tryon' };
+        if (payload?.quality === 'premium' || payload?.modelTier === 'premium') {
+            return { credits: aiCreditCosts.apiPremiumImage, operation: 'api-premium-image' };
+        }
+        if (payload?.provider === 'external' || payload?.modelProvider === 'external') {
+            return { credits: aiCreditCosts.apiStandardImage, operation: 'api-standard-image' };
+        }
+        if (payload?.quality === 'hd' || payload?.refine === true) {
+            return { credits: aiCreditCosts.localHdImage, operation: 'local-hd-image' };
+        }
+        return { credits: aiCreditCosts.localImage, operation: 'local-image' };
+    };
+
+    const debitAiCreditsForJob = async (
+        userId: number,
+        params: { credits: number; operation: string; rawPayload?: unknown }
+    ) => {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            const membership = await membershipModel.debitAiCredits(client, {
+                userId,
+                credits: params.credits,
+                operation: params.operation,
+                rawPayload: params.rawPayload
+            });
+            await client.query('COMMIT');
+            await invalidateMembershipCache(userId);
+            return membership;
+        } catch (error) {
+            try {
+                await client.query('ROLLBACK');
+            } catch {
+                // ignore rollback failure
+            }
+            throw error;
+        } finally {
+            client.release();
+        }
+    };
+
+    const refundAiCreditsForFailedEnqueue = async (
+        userId: number,
+        params: { credits: number; operation: string; rawPayload?: unknown }
+    ) => {
+        const client = await pool.connect();
+        try {
+            await client.query('BEGIN');
+            await membershipModel.creditAiCredits(client, {
+                userId,
+                credits: params.credits,
+                rawPayload: {
+                    type: 'ai_credit_refund',
+                    operation: params.operation,
+                    ...(params.rawPayload && typeof params.rawPayload === 'object' ? params.rawPayload as Record<string, unknown> : {})
+                }
+            });
+            await client.query('COMMIT');
+            await invalidateMembershipCache(userId);
+        } catch (error) {
+            try {
+                await client.query('ROLLBACK');
+            } catch {
+                // ignore rollback failure
+            }
+            console.warn('AI credit refund failed after enqueue failure:', error);
+        } finally {
+            client.release();
+        }
     };
 
     // 注册路由
@@ -1048,20 +1149,50 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
             if (!canEnqueue) return;
 
             const generationOptions = parseAiGenerationOptions(req.body);
+            const creditCharge = getAiCreditCostForJob(AI_QUEUE_NAME, req.body);
 
-            const job = await enqueueJob(
-                AI_QUEUE_NAME,
-                {
-                    userId: req.userId,
-                    prompt: prompt.trim(),
-                    ...generationOptions
-                },
-                buildJobOptions()
-            );
+            try {
+                await debitAiCreditsForJob(req.userId, {
+                    credits: creditCharge.credits,
+                    operation: creditCharge.operation,
+                    rawPayload: {
+                        source: 'generate',
+                        promptPreview: prompt.trim().slice(0, 120)
+                    }
+                });
+            } catch (error) {
+                if ((error as Error)?.message === 'INSUFFICIENT_AI_CREDITS') {
+                    return sendError(res, 402, API_COMMON_ERROR_CODES.INSUFFICIENT_BALANCE, 'Not enough AI credits for this generation.', {
+                        requiredCredits: creditCharge.credits,
+                        operation: creditCharge.operation
+                    });
+                }
+                throw error;
+            }
+
+            let job;
+            try {
+                job = await enqueueJob(
+                    AI_QUEUE_NAME,
+                    {
+                        userId: req.userId,
+                        prompt: prompt.trim(),
+                        ...generationOptions
+                    },
+                    buildJobOptions()
+                );
+            } catch (error) {
+                await refundAiCreditsForFailedEnqueue(req.userId, {
+                    credits: creditCharge.credits,
+                    operation: creditCharge.operation,
+                    rawPayload: { source: 'generate' }
+                });
+                throw error;
+            }
 
             incrementCounter('jobs_enqueued_total', { queue: AI_QUEUE_NAME, source: 'generate' });
 
-            return res.status(202).json({ jobId: job.id, queue: AI_QUEUE_NAME });
+            return res.status(202).json({ jobId: job.id, queue: AI_QUEUE_NAME, creditsCharged: creditCharge.credits });
         } catch (error) {
             console.error('Membership gate error:', error);
             return sendError(res, 500, 'INTERNAL_ERROR', 'Internal server error');
@@ -1121,21 +1252,52 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
                 const canEnqueue = await assertQueueCapacity(AI_QUEUE_NAME, res);
                 if (!canEnqueue) return;
 
-                const job = await enqueueJob(
-                    AI_QUEUE_NAME,
-                    {
-                        userId: req.userId,
-                        prompt,
-                        ...parseAiGenerationOptions(payload)
-                    },
-                    buildJobOptions()
-                );
+                const creditCharge = getAiCreditCostForJob(AI_QUEUE_NAME, payload);
+                try {
+                    await debitAiCreditsForJob(req.userId, {
+                        credits: creditCharge.credits,
+                        operation: creditCharge.operation,
+                        rawPayload: {
+                            source: 'jobs',
+                            promptPreview: prompt.slice(0, 120)
+                        }
+                    });
+                } catch (error) {
+                    if ((error as Error)?.message === 'INSUFFICIENT_AI_CREDITS') {
+                        return sendError(res, 402, API_COMMON_ERROR_CODES.INSUFFICIENT_BALANCE, 'Not enough AI credits for this generation.', {
+                            requiredCredits: creditCharge.credits,
+                            operation: creditCharge.operation
+                        });
+                    }
+                    throw error;
+                }
+
+                let job;
+                try {
+                    job = await enqueueJob(
+                        AI_QUEUE_NAME,
+                        {
+                            userId: req.userId,
+                            prompt,
+                            ...parseAiGenerationOptions(payload)
+                        },
+                        buildJobOptions()
+                    );
+                } catch (error) {
+                    await refundAiCreditsForFailedEnqueue(req.userId, {
+                        credits: creditCharge.credits,
+                        operation: creditCharge.operation,
+                        rawPayload: { source: 'jobs' }
+                    });
+                    throw error;
+                }
 
                 incrementCounter('jobs_enqueued_total', { queue: AI_QUEUE_NAME, source: 'jobs' });
 
                 return res.status(202).json({
                     jobId: job.id,
                     queue: AI_QUEUE_NAME,
+                    creditsCharged: creditCharge.credits,
                     queueStats: await getQueueStats(AI_QUEUE_NAME)
                 });
             }
@@ -1168,6 +1330,26 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
             const canEnqueue = await assertQueueCapacity(TRYON_QUEUE_NAME, res);
             if (!canEnqueue) return;
 
+            const creditCharge = getAiCreditCostForJob(TRYON_QUEUE_NAME, payload);
+            try {
+                await debitAiCreditsForJob(req.userId, {
+                    credits: creditCharge.credits,
+                    operation: creditCharge.operation,
+                    rawPayload: {
+                        source: 'jobs',
+                        clothType: typeof payload?.clothType === 'string' ? payload.clothType : null
+                    }
+                });
+            } catch (error) {
+                if ((error as Error)?.message === 'INSUFFICIENT_AI_CREDITS') {
+                    return sendError(res, 402, API_COMMON_ERROR_CODES.INSUFFICIENT_BALANCE, 'Not enough AI credits for virtual try-on.', {
+                        requiredCredits: creditCharge.credits,
+                        operation: creditCharge.operation
+                    });
+                }
+                throw error;
+            }
+
             // Save input images to disk, store URL instead of base64 in Redis
             try {
                 const personStored = await saveInputImage(personDataUrl, `person-${Date.now()}`);
@@ -1184,23 +1366,34 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
                 } catch (e) { /* keep original base64 */ }
             }
 
-            const job = await enqueueJob(
-                TRYON_QUEUE_NAME,
-                {
-                    userId: req.userId,
-                    personDataUrl,
-                    clothDataUrl,
-                    clothType: typeof payload?.clothType === 'string' ? payload.clothType : undefined,
-                    faceDataUrl,
-                },
-                buildJobOptions()
-            );
+            let job;
+            try {
+                job = await enqueueJob(
+                    TRYON_QUEUE_NAME,
+                    {
+                        userId: req.userId,
+                        personDataUrl,
+                        clothDataUrl,
+                        clothType: typeof payload?.clothType === 'string' ? payload.clothType : undefined,
+                        faceDataUrl,
+                    },
+                    buildJobOptions()
+                );
+            } catch (error) {
+                await refundAiCreditsForFailedEnqueue(req.userId, {
+                    credits: creditCharge.credits,
+                    operation: creditCharge.operation,
+                    rawPayload: { source: 'jobs' }
+                });
+                throw error;
+            }
 
             incrementCounter('jobs_enqueued_total', { queue: TRYON_QUEUE_NAME, source: 'jobs' });
 
             return res.status(202).json({
                 jobId: job.id,
                 queue: TRYON_QUEUE_NAME,
+                creditsCharged: creditCharge.credits,
                 queueStats: await getQueueStats(TRYON_QUEUE_NAME)
             });
         } catch (error) {
@@ -3080,31 +3273,10 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
 
                 const normalizedCategory = normalizeCategory(resolvedCategory) ?? resolvedCategory;
 
-                const canvasPayload = {
-                    frontSnapshot: cartItem.canvas_front ?? null,
-                    backSnapshot: cartItem.canvas_back ?? null,
-                    meta: cartItem.canvas_meta ?? null
-                };
-
-                const [itemsExternalized, selectionsExternalized, designExternalized, shippingExternalized, canvasExternalized] = await Promise.all([
-                    externalizeImageDataUrls(cartItem.items || [], { context: 'checkout-items' }),
-                    externalizeImageDataUrls({ ...(cartItem.selections || {}), quantity: qty }, { context: 'checkout-selections' }),
-                    externalizeImageDataUrls(cartItem.design || {}, { context: 'checkout-design' }),
-                    externalizeImageDataUrls({ address }, { context: 'checkout-shipping' }),
-                    externalizeImageDataUrls(canvasPayload, { context: 'checkout-canvas' }),
-                ]);
-
-                const checkoutAssetRefs = [
-                    ...itemsExternalized.assets,
-                    ...selectionsExternalized.assets,
-                    ...designExternalized.assets,
-                    ...shippingExternalized.assets,
-                    ...canvasExternalized.assets,
-                ];
-
-                const checkoutCanvasMeta = mergeAssetRefs(canvasExternalized.value?.meta, checkoutAssetRefs);
-
-                const selectionsWithQty = selectionsExternalized.value;
+                // Cart items are already externalized at add-to-cart time.
+                // Use stored values directly — no need to re-process data URLs.
+                const selectionsWithQty = { ...(cartItem.selections || {}), quantity: qty };
+                const checkoutCanvasMeta = cartItem.canvas_meta ?? null;
 
                 const created = await client.query(
                     `
@@ -3116,14 +3288,14 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
                         req.userId,
                         orderTotal,
                         normalizedCategory ?? null,
-                        JSON.stringify(itemsExternalized.value),
+                        JSON.stringify(cartItem.items || []),
                         JSON.stringify(selectionsWithQty),
-                        JSON.stringify(designExternalized.value),
-                        JSON.stringify(shippingExternalized.value),
+                        JSON.stringify(cartItem.design || {}),
+                        JSON.stringify({ address }),
                         address,
                         phone || null,
-                        canvasExternalized.value?.frontSnapshot ?? null,
-                        canvasExternalized.value?.backSnapshot ?? null,
+                        cartItem.canvas_front ?? null,
+                        cartItem.canvas_back ?? null,
                         checkoutCanvasMeta ? JSON.stringify(checkoutCanvasMeta) : null,
                         cartItem.source_all_id ?? null
                     ]
@@ -3182,9 +3354,9 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
                             createdOrder.id,
                             normalizedCategory ?? null,
                             JSON.stringify(selectionsWithQty || {}),
-                            JSON.stringify(designExternalized.value),
-                            canvasExternalized.value?.frontSnapshot ?? null,
-                            canvasExternalized.value?.backSnapshot ?? null,
+                            JSON.stringify(cartItem.design || {}),
+                            cartItem.canvas_front ?? null,
+                            cartItem.canvas_back ?? null,
                             checkoutCanvasMeta ? JSON.stringify(checkoutCanvasMeta) : null
                         ]
                     );
@@ -3271,6 +3443,26 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
             res.json(payload);
         } catch (error) {
             console.error('Get order summaries error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
+    router.get('/orders/:id', authenticate, async (req, res) => {
+        try {
+            if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
+            const orderId = Number(req.params.id);
+            if (!Number.isFinite(orderId) || orderId <= 0) {
+                return res.status(400).json({ message: 'Invalid order ID' });
+            }
+
+            const order = await orderReadModel.getOrderById(orderId, req.userId as number);
+            if (!order) {
+                return res.status(404).json({ message: 'Order not found' });
+            }
+
+            res.json({ order });
+        } catch (error) {
+            console.error('Get order detail error:', error);
             res.status(500).json({ message: 'Internal server error' });
         }
     });
@@ -3787,6 +3979,27 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
         }
     });
 
+    router.get('/memberships/plans', async (_req, res) => {
+        res.json({
+            plans: Object.entries(membershipPlans).map(([id, plan]) => ({
+                id,
+                label: plan.label,
+                amount: plan.amount,
+                clothingBalance: plan.clothingBalance,
+                aiCredits: plan.aiCredits,
+                currency: plan.currency,
+                durationDays: plan.durationDays,
+                discountRate: plan.discountRate,
+                equivalents: getMembershipPlanEquivalents(plan.aiCredits)
+            })),
+            aiCreditCosts,
+            inviteRules: {
+                inviteeDiscountText: '好友开通会员可获得专属优惠',
+                inviterRewardText: '邀请好友成功开通后可获得奖励额度'
+            }
+        });
+    });
+
     router.post('/memberships', authenticate, async (req, res) => {
         try {
             if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
@@ -3811,12 +4024,19 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
                 userId: req.userId,
                 planId,
                 amount: planConfig.amount,
-                balance: planConfig.amount,
+                balance: planConfig.clothingBalance,
+                aiCredits: planConfig.aiCredits,
                 currency: planConfig.currency,
                 transactionId,
                 provider: typeof provider === 'string' && provider ? provider : 'manual',
                 expiresAt,
-                rawPayload: rawPayload ?? null
+                rawPayload: {
+                    ...(rawPayload && typeof rawPayload === 'object' ? rawPayload : {}),
+                    clothingBalance: planConfig.clothingBalance,
+                    aiCredits: planConfig.aiCredits,
+                    discountRate: planConfig.discountRate,
+                    planLabel: planConfig.label
+                }
             });
 
             // If user redeemed an invite code before purchasing, pay the inviter now.
@@ -3906,6 +4126,327 @@ export const createRoutes = (pool: Pool | null, readPool?: Pool | null) => {
             });
         } catch (error) {
             console.error('Profile update error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
+    // ==================== 个人作品库 (User Designs) ====================
+
+    // 列表：分页查询当前用户的作品（不含 elements，只含缩略图+元信息）
+    router.get('/user-designs', authenticate, async (req, res) => {
+        try {
+            if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
+
+            const page = Math.max(1, Number.parseInt(String(req.query.page || '1'), 10));
+            const limit = Math.min(50, Math.max(1, Number.parseInt(String(req.query.limit || '20'), 10)));
+            const offset = (page - 1) * limit;
+            const sourceType = typeof req.query.sourceType === 'string' ? req.query.sourceType : null;
+            const favorite = req.query.favorite === 'true' ? true : req.query.favorite === 'false' ? false : null;
+            const sort = req.query.sort === 'oldest' ? 'ASC' : 'DESC';
+
+            const cacheKey = `user-designs:list:${req.userId}:${page}:${limit}:${sourceType || ''}:${favorite}:${sort}`;
+            const payload = await readThroughCache('/user-designs', cacheKey, cacheTtl.userDesignsList, async () => {
+                const conditions = ['user_id = $1', "status = 'active'"];
+                const params: any[] = [req.userId];
+                let idx = 2;
+
+                if (sourceType) {
+                    conditions.push(`source_type = $${idx}`);
+                    params.push(sourceType);
+                    idx++;
+                }
+                if (favorite !== null) {
+                    conditions.push(`is_favorite = $${idx}`);
+                    params.push(favorite);
+                    idx++;
+                }
+
+                params.push(limit, offset);
+                const whereClause = conditions.join(' AND ');
+
+                const countResult = await pool.query(
+                    `SELECT COUNT(*)::int AS total FROM user_designs WHERE ${whereClause}`,
+                    params.slice(0, idx - 1)
+                );
+                const total = countResult.rows[0]?.total || 0;
+
+                const dataResult = await pool.query(
+                    `SELECT id, title, category, thumbnail_front, thumbnail_back,
+                            source_type, is_favorite, created_at, updated_at
+                     FROM user_designs
+                     WHERE ${whereClause}
+                     ORDER BY updated_at ${sort}
+                     LIMIT $${idx} OFFSET $${idx + 1}`,
+                    params
+                );
+
+                return { designs: dataResult.rows, total, page, limit };
+            });
+
+            res.json(payload);
+        } catch (error) {
+            console.error('Get user designs error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
+    // 详情：获取单个作品（含完整 elements）
+    router.get('/user-designs/:id', authenticate, async (req, res) => {
+        try {
+            if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
+
+            const designId = Number(req.params.id);
+            if (!Number.isFinite(designId) || designId <= 0) {
+                return res.status(400).json({ message: 'Invalid design ID' });
+            }
+
+            const result = await pool.query(
+                `SELECT id, user_id, title, category, selections, elements, sides,
+                        canvas_meta, thumbnail_front, thumbnail_back,
+                        source_type, source_job_id, is_favorite, status,
+                        created_at, updated_at
+                 FROM user_designs
+                 WHERE id = $1 AND user_id = $2 AND status = 'active'`,
+                [designId, req.userId]
+            );
+
+            if (result.rows.length === 0) {
+                return res.status(404).json({ message: 'Design not found' });
+            }
+
+            res.json({ design: result.rows[0] });
+        } catch (error) {
+            console.error('Get user design detail error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
+    // 创建/更新草稿（upsert by id）
+    router.post('/user-designs', authenticate, async (req, res) => {
+        try {
+            if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
+
+            const { id, title, category, selections, elements, sides, canvasMeta,
+                    thumbnailFront, thumbnailBack, sourceType, sourceJobId } = req.body || {};
+
+            // 外部化 base64 图片（elements 中的 content 字段）
+            let elementsExt = elements;
+            let assetRefs: StoredAssetRef[] = [];
+            if (elements && Array.isArray(elements)) {
+                const result = await externalizeImageDataUrls(elements, { context: 'user-design-elements' });
+                elementsExt = result.value;
+                assetRefs = result.assets;
+            }
+
+            // 外部化缩略图
+            let thumbFront = thumbnailFront || null;
+            let thumbBack = thumbnailBack || null;
+            if (thumbFront && thumbFront.startsWith('data:')) {
+                try {
+                    const stored = await saveInputImage(thumbFront, `ud-thumb-front-${Date.now()}`);
+                    if (stored) thumbFront = stored.url;
+                } catch (e) { /* keep original */ }
+            }
+            if (thumbBack && thumbBack.startsWith('data:')) {
+                try {
+                    const stored = await saveInputImage(thumbBack, `ud-thumb-back-${Date.now()}`);
+                    if (stored) thumbBack = stored.url;
+                } catch (e) { /* keep original */ }
+            }
+
+            if (id && Number.isFinite(Number(id))) {
+                // 更新已有作品
+                const result = await pool.query(
+                    `UPDATE user_designs
+                     SET title = COALESCE($1, title),
+                         category = COALESCE($2, category),
+                         selections = COALESCE($3, selections),
+                         elements = COALESCE($4, elements),
+                         sides = COALESCE($5, sides),
+                         canvas_meta = COALESCE($6, canvas_meta),
+                         thumbnail_front = COALESCE($7, thumbnail_front),
+                         thumbnail_back = COALESCE($8, thumbnail_back),
+                         updated_at = CURRENT_TIMESTAMP
+                     WHERE id = $9 AND user_id = $10 AND status = 'active'
+                     RETURNING id`,
+                    [title, category,
+                     selections ? JSON.stringify(selections) : null,
+                     elementsExt ? JSON.stringify(elementsExt) : null,
+                     sides ? JSON.stringify(sides) : null,
+                     canvasMeta ? JSON.stringify(canvasMeta) : null,
+                     thumbFront, thumbBack,
+                     Number(id), req.userId]
+                );
+                if (result.rows.length === 0) {
+                    return res.status(404).json({ message: 'Design not found' });
+                }
+                await invalidateUserDesignsCache(req.userId);
+                res.json({ id: result.rows[0].id, message: 'Updated' });
+            } else {
+                // 创建新作品
+                const result = await pool.query(
+                    `INSERT INTO user_designs
+                     (user_id, title, category, selections, elements, sides, canvas_meta,
+                      thumbnail_front, thumbnail_back, source_type, source_job_id)
+                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+                     RETURNING id`,
+                    [req.userId, title || null, category || null,
+                     selections ? JSON.stringify(selections) : null,
+                     elementsExt ? JSON.stringify(elementsExt) : null,
+                     sides ? JSON.stringify(sides) : null,
+                     canvasMeta ? JSON.stringify(canvasMeta) : null,
+                     thumbFront, thumbBack,
+                     sourceType || 'editor',
+                     sourceJobId || null]
+                );
+                await invalidateUserDesignsCache(req.userId);
+                res.status(201).json({ id: result.rows[0].id, message: 'Created' });
+            }
+        } catch (error) {
+            console.error('Create/update user design error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
+    // 更新（改标题、改分类等元信息）
+    router.put('/user-designs/:id', authenticate, async (req, res) => {
+        try {
+            if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
+
+            const designId = Number(req.params.id);
+            if (!Number.isFinite(designId) || designId <= 0) {
+                return res.status(400).json({ message: 'Invalid design ID' });
+            }
+
+            const { title, category } = req.body || {};
+            const sets: string[] = [];
+            const params: any[] = [];
+            let idx = 1;
+
+            if (typeof title === 'string') {
+                sets.push(`title = $${idx}`);
+                params.push(title);
+                idx++;
+            }
+            if (typeof category === 'string') {
+                sets.push(`category = $${idx}`);
+                params.push(category);
+                idx++;
+            }
+
+            if (sets.length === 0) {
+                return res.status(400).json({ message: 'No fields to update' });
+            }
+
+            sets.push('updated_at = CURRENT_TIMESTAMP');
+            params.push(designId, req.userId);
+
+            const result = await pool.query(
+                `UPDATE user_designs SET ${sets.join(', ')}
+                 WHERE id = $${idx} AND user_id = $${idx + 1} AND status = 'active'
+                 RETURNING id`,
+                params
+            );
+            if (result.rows.length === 0) {
+                return res.status(404).json({ message: 'Design not found' });
+            }
+
+            await invalidateUserDesignsCache(req.userId);
+            res.json({ id: result.rows[0].id, message: 'Updated' });
+        } catch (error) {
+            console.error('Update user design error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
+    // 软删除
+    router.delete('/user-designs/:id', authenticate, async (req, res) => {
+        try {
+            if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
+
+            const designId = Number(req.params.id);
+            if (!Number.isFinite(designId) || designId <= 0) {
+                return res.status(400).json({ message: 'Invalid design ID' });
+            }
+
+            const result = await pool.query(
+                `UPDATE user_designs SET status = 'deleted', updated_at = CURRENT_TIMESTAMP
+                 WHERE id = $1 AND user_id = $2 AND status = 'active'
+                 RETURNING id`,
+                [designId, req.userId]
+            );
+            if (result.rows.length === 0) {
+                return res.status(404).json({ message: 'Design not found' });
+            }
+
+            await invalidateUserDesignsCache(req.userId);
+            res.json({ success: true });
+        } catch (error) {
+            console.error('Delete user design error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
+    // 复制为新作品
+    router.post('/user-designs/:id/duplicate', authenticate, async (req, res) => {
+        try {
+            if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
+
+            const designId = Number(req.params.id);
+            if (!Number.isFinite(designId) || designId <= 0) {
+                return res.status(400).json({ message: 'Invalid design ID' });
+            }
+
+            const result = await pool.query(
+                `INSERT INTO user_designs
+                 (user_id, title, category, selections, elements, sides, canvas_meta,
+                  thumbnail_front, thumbnail_back, source_type, source_job_id)
+                 SELECT user_id,
+                        COALESCE(title, '') || ' (副本)',
+                        category, selections, elements, sides, canvas_meta,
+                        thumbnail_front, thumbnail_back, 'duplicated', NULL
+                 FROM user_designs
+                 WHERE id = $1 AND user_id = $2 AND status = 'active'
+                 RETURNING id`,
+                [designId, req.userId]
+            );
+            if (result.rows.length === 0) {
+                return res.status(404).json({ message: 'Design not found' });
+            }
+
+            await invalidateUserDesignsCache(req.userId);
+            res.status(201).json({ id: result.rows[0].id, message: 'Duplicated' });
+        } catch (error) {
+            console.error('Duplicate user design error:', error);
+            res.status(500).json({ message: 'Internal server error' });
+        }
+    });
+
+    // 收藏切换
+    router.put('/user-designs/:id/favorite', authenticate, async (req, res) => {
+        try {
+            if (!req.userId) return res.status(401).json({ message: 'User ID not found' });
+
+            const designId = Number(req.params.id);
+            if (!Number.isFinite(designId) || designId <= 0) {
+                return res.status(400).json({ message: 'Invalid design ID' });
+            }
+
+            const result = await pool.query(
+                `UPDATE user_designs
+                 SET is_favorite = NOT is_favorite, updated_at = CURRENT_TIMESTAMP
+                 WHERE id = $1 AND user_id = $2 AND status = 'active'
+                 RETURNING id, is_favorite`,
+                [designId, req.userId]
+            );
+            if (result.rows.length === 0) {
+                return res.status(404).json({ message: 'Design not found' });
+            }
+
+            await invalidateUserDesignsCache(req.userId);
+            res.json({ id: result.rows[0].id, isFavorite: result.rows[0].is_favorite });
+        } catch (error) {
+            console.error('Toggle favorite error:', error);
             res.status(500).json({ message: 'Internal server error' });
         }
     });
