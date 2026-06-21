@@ -80,8 +80,21 @@ export interface SimpleHistoryItem {
 
 export type HistoryResponse = Record<string, SimpleHistoryItem>;
 
+type QueueStateResponse = {
+  queue_running?: unknown[];
+  queue_pending?: unknown[];
+};
+
+type ServerQueueStats = {
+  url: string;
+  running: number;
+  pending: number;
+  load: number;
+};
+
 export class SimpleComfyUIClient {
   private serverUrl: string;
+  private primaryUrls: string[];
   private fallbackUrls: string[];
   private activeUrl: string | null = null;
   private readonly defaultModelName: string;
@@ -92,12 +105,17 @@ export class SimpleComfyUIClient {
   private readonly defaultWidth: number;
   private readonly defaultHeight: number;
 
+  // Round-robin tie breaker shared across all instances in this process.
+  private static rrIndex = 0;
+
   constructor(serverUrl: string = "http://127.0.0.1:8188") {
     this.serverUrl = serverUrl;
 
     const urlsFromConfig = serverUrl.includes(",")
-      ? serverUrl.split(",").map(url => url.trim())
-      : [serverUrl];
+      ? serverUrl.split(",").map(url => url.trim()).filter(Boolean)
+      : [serverUrl.trim()].filter(Boolean);
+
+    this.primaryUrls = urlsFromConfig;
 
     const defaultLocalUrls = [
       "http://0.0.0.0:8188",
@@ -120,36 +138,84 @@ export class SimpleComfyUIClient {
     this.defaultHeight = Number.parseInt(process.env.COMFYUI_DEFAULT_HEIGHT || "768", 10);
   }
 
-  private async findAvailableServer(): Promise<string | null> {
-    if (this.activeUrl) {
-      try {
-        const response = await fetch(`${this.activeUrl}/queue`, {
-          method: "GET",
-          signal: AbortSignal.timeout(3000),
-        });
-        if (response.ok) {
-          return this.activeUrl;
-        }
-        this.activeUrl = null;
-      } catch {
-        this.activeUrl = null;
+  private setActiveServer(url: string): string {
+    this.activeUrl = url;
+    this.serverUrl = url;
+    return url;
+  }
+
+  private async getQueueStats(url: string, timeoutMs: number): Promise<ServerQueueStats | null> {
+    try {
+      const response = await fetch(`${url}/queue`, {
+        method: "GET",
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (!response.ok) {
+        return null;
       }
+
+      const queue = (await response.json().catch(() => null)) as QueueStateResponse | null;
+      const running = Array.isArray(queue?.queue_running) ? queue.queue_running.length : 0;
+      const pending = Array.isArray(queue?.queue_pending) ? queue.queue_pending.length : 0;
+
+      return {
+        url,
+        running,
+        pending,
+        load: running + pending,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  private rotateUrls(urls: string[]): string[] {
+    if (urls.length <= 1) {
+      return urls;
+    }
+    const startIdx = SimpleComfyUIClient.rrIndex % urls.length;
+    SimpleComfyUIClient.rrIndex++;
+    return urls.map((_, i) => urls[(startIdx + i) % urls.length]);
+  }
+
+  private async pickLeastLoadedServer(urls: string[], timeoutMs: number): Promise<string | null> {
+    const rotatedUrls = this.rotateUrls(urls);
+    const stats = (await Promise.all(rotatedUrls.map(url => this.getQueueStats(url, timeoutMs))))
+      .filter((item): item is ServerQueueStats => item !== null);
+
+    if (stats.length === 0) {
+      return null;
+    }
+
+    stats.sort((a, b) => a.load - b.load || a.running - b.running || a.pending - b.pending);
+    return this.setActiveServer(stats[0].url);
+  }
+
+  private async findAvailableServer(): Promise<string | null> {
+    if (this.primaryUrls.length > 1) {
+      const primary = await this.pickLeastLoadedServer(this.primaryUrls, 3000);
+      if (primary) {
+        return primary;
+      }
+
+      return this.pickLeastLoadedServer(
+        this.fallbackUrls.filter(url => !this.primaryUrls.includes(url)),
+        5000
+      );
+    }
+
+    if (this.activeUrl) {
+      const active = await this.getQueueStats(this.activeUrl, 3000);
+      if (active) {
+        return this.activeUrl;
+      }
+      this.activeUrl = null;
     }
 
     for (const url of this.fallbackUrls) {
-      try {
-        const response = await fetch(`${url}/queue`, {
-          method: "GET",
-          signal: AbortSignal.timeout(5000),
-        });
-
-        if (response.ok) {
-          this.activeUrl = url;
-          this.serverUrl = url;
-          return url;
-        }
-      } catch {
-        continue;
+      const stats = await this.getQueueStats(url, 5000);
+      if (stats) {
+        return this.setActiveServer(url);
       }
     }
 
@@ -244,8 +310,13 @@ export class SimpleComfyUIClient {
     };
   }
 
-  async queuePrompt(workflow: Record<string, unknown>): Promise<QueueResponse> {
-    const availableServer = await this.findAvailableServer();
+  async queuePrompt(
+    workflow: Record<string, unknown>,
+    options: { serverUrl?: string } = {}
+  ): Promise<QueueResponse> {
+    const availableServer = options.serverUrl
+      ? this.setActiveServer(options.serverUrl)
+      : await this.findAvailableServer();
     if (!availableServer) {
       throw new Error("没有可用的 ComfyUI 服务器");
     }
@@ -310,7 +381,10 @@ export class SimpleComfyUIClient {
     subfolder: string;
   }> {
     const startTime = Date.now();
-    const pollInterval = 2000;
+    const configuredPollInterval = Number.parseInt(process.env.COMFYUI_POLL_INTERVAL_MS || "750", 10);
+    const pollInterval = Number.isFinite(configuredPollInterval)
+      ? Math.max(250, configuredPollInterval)
+      : 750;
 
     while (Date.now() - startTime < timeoutMs) {
       try {

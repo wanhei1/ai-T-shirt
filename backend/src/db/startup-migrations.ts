@@ -417,7 +417,137 @@ const ensureOrderAndDesignTables = async (pool: Pool) => {
         )
     `);
 
+    // Creator storefronts: one public store per user, Taobao-style.
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS creator_stores (
+            id SERIAL PRIMARY KEY,
+            owner_user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            slug VARCHAR(80) NOT NULL UNIQUE,
+            display_name VARCHAR(120) NOT NULL,
+            bio TEXT,
+            avatar_url TEXT,
+            banner_url TEXT,
+            tags TEXT[] NOT NULL DEFAULT '{}',
+            status VARCHAR(24) NOT NULL DEFAULT 'active',
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (owner_user_id)
+        )
+    `);
+
+    // Store products wrap all_designs with commerce-facing metadata.
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS store_products (
+            id SERIAL PRIMARY KEY,
+            store_id INTEGER NOT NULL REFERENCES creator_stores(id) ON DELETE CASCADE,
+            all_design_id INTEGER NOT NULL REFERENCES all_designs(id) ON DELETE CASCADE,
+            title VARCHAR(160) NOT NULL,
+            description TEXT,
+            price NUMERIC(10,2) NOT NULL DEFAULT 99,
+            compare_at_price NUMERIC(10,2),
+            tags TEXT[] NOT NULL DEFAULT '{}',
+            status VARCHAR(24) NOT NULL DEFAULT 'draft',
+            sort_rank INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE (all_design_id)
+        )
+    `);
+
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS store_product_images (
+            id SERIAL PRIMARY KEY,
+            product_id INTEGER NOT NULL REFERENCES store_products(id) ON DELETE CASCADE,
+            image_url TEXT NOT NULL,
+            image_kind VARCHAR(32) NOT NULL DEFAULT 'gallery',
+            alt_text VARCHAR(180),
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+
+    try {
+        await pool.query(`ALTER TABLE creator_stores ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}'`);
+        await pool.query(`ALTER TABLE creator_stores ADD COLUMN IF NOT EXISTS status VARCHAR(24) NOT NULL DEFAULT 'active'`);
+        await pool.query(`ALTER TABLE creator_stores ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP`);
+        await pool.query(`ALTER TABLE store_products ADD COLUMN IF NOT EXISTS compare_at_price NUMERIC(10,2)`);
+        await pool.query(`ALTER TABLE store_products ADD COLUMN IF NOT EXISTS tags TEXT[] NOT NULL DEFAULT '{}'`);
+        await pool.query(`ALTER TABLE store_products ADD COLUMN IF NOT EXISTS status VARCHAR(24) NOT NULL DEFAULT 'draft'`);
+        await pool.query(`ALTER TABLE store_products ADD COLUMN IF NOT EXISTS sort_rank INTEGER NOT NULL DEFAULT 0`);
+        await pool.query(`ALTER TABLE store_products ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP`);
+        await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_creator_stores_owner ON creator_stores(owner_user_id)`);
+        await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_creator_stores_slug ON creator_stores(slug)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_creator_stores_status ON creator_stores(status)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_store_products_store_status_rank ON store_products(store_id, status, sort_rank DESC, created_at DESC)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_store_products_status_created ON store_products(status, created_at DESC)`);
+        await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_store_products_all_design ON store_products(all_design_id)`);
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_store_product_images_product_sort ON store_product_images(product_id, sort_order ASC, id ASC)`);
+    } catch (err) {
+        console.warn('⚠️ Failed to ensure marketplace store/product tables:', (err as any)?.message || err);
+    }
+
     // 购物车表：保存用户准备下单的设计
+    // Backfill marketplace products from existing public designs so /shop has store goods immediately.
+    try {
+        await pool.query(`
+            INSERT INTO creator_stores (owner_user_id, slug, display_name, bio, banner_url, tags, status)
+            SELECT DISTINCT
+                u.id,
+                'yituai-u' || u.id::text,
+                COALESCE(NULLIF(u.username, ''), 'YITUAI Designer') || ' Store',
+                'AI apparel store on YITUAI.',
+                '/page-heroes/hero-profile-wardrobe-gallery.png',
+                ARRAY['Chinese culture', 'AI design'],
+                'active'
+            FROM all_designs a
+            JOIN users u ON u.id = a.user_id
+            WHERE a.user_id IS NOT NULL
+            ON CONFLICT (owner_user_id) DO NOTHING
+        `);
+
+        await pool.query(`
+            INSERT INTO store_products (store_id, all_design_id, title, description, price, tags, status)
+            SELECT
+                s.id,
+                a.id,
+                COALESCE(NULLIF(a.selections->>'style', ''), 'YITUAI Tee') || ' - ' || COALESCE(NULLIF(a.selections->>'color', ''), COALESCE(a.category, 'Guochao')),
+                'Original AI apparel design from YITUAI. Buy directly or customize the same design.',
+                COALESCE(NULLIF(a.selections->>'price', '')::numeric, 99),
+                ARRAY[COALESCE(a.category, 'Guochao'), 'Original tee'],
+                'active'
+            FROM all_designs a
+            JOIN creator_stores s ON s.owner_user_id = a.user_id
+            WHERE a.user_id IS NOT NULL
+            ON CONFLICT (all_design_id) DO NOTHING
+        `);
+
+        await pool.query(`
+            INSERT INTO store_product_images (product_id, image_url, image_kind, sort_order)
+            SELECT p.id, a.canvas_front, 'front', 0
+            FROM store_products p
+            JOIN all_designs a ON a.id = p.all_design_id
+            WHERE a.canvas_front IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM store_product_images i
+                WHERE i.product_id = p.id AND i.image_url = a.canvas_front
+              )
+        `);
+
+        await pool.query(`
+            INSERT INTO store_product_images (product_id, image_url, image_kind, sort_order)
+            SELECT p.id, a.canvas_back, 'back', 1
+            FROM store_products p
+            JOIN all_designs a ON a.id = p.all_design_id
+            WHERE a.canvas_back IS NOT NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM store_product_images i
+                WHERE i.product_id = p.id AND i.image_url = a.canvas_back
+              )
+        `);
+    } catch (err) {
+        console.warn('Failed to backfill marketplace products:', (err as any)?.message || err);
+    }
+
     await pool.query(`
         CREATE TABLE IF NOT EXISTS cart_items (
             id SERIAL PRIMARY KEY,
@@ -573,6 +703,7 @@ const ensureMembershipTables = async (pool: Pool) => {
             plan_id VARCHAR(50) NOT NULL,
             amount NUMERIC(10,2) NOT NULL,
             balance NUMERIC(10,2) NOT NULL DEFAULT 0,
+            ai_credits NUMERIC(10,2) NOT NULL DEFAULT 0,
             currency VARCHAR(10) DEFAULT 'CNY',
             status VARCHAR(20) DEFAULT 'active',
             transaction_id VARCHAR(255) UNIQUE NOT NULL,
@@ -588,6 +719,7 @@ const ensureMembershipTables = async (pool: Pool) => {
     // Ensure balance exists for older installations.
     try {
         await pool.query(`ALTER TABLE memberships ADD COLUMN IF NOT EXISTS balance NUMERIC(10,2) NOT NULL DEFAULT 0`);
+        await pool.query(`ALTER TABLE memberships ADD COLUMN IF NOT EXISTS ai_credits NUMERIC(10,2) NOT NULL DEFAULT 0`);
         await pool.query(`ALTER TABLE memberships ADD COLUMN IF NOT EXISTS raw_payload JSONB`);
         await pool.query(`ALTER TABLE memberships ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP`);
         await pool.query(`UPDATE memberships SET updated_at = COALESCE(updated_at, created_at, CURRENT_TIMESTAMP)`);
@@ -671,6 +803,35 @@ const ensureAiImageResultsTable = async (pool: Pool) => {
     }
 };
 
+const ensureUserDesignsTable = async (pool: Pool) => {
+    await pool.query(`
+        CREATE TABLE IF NOT EXISTS user_designs (
+            id              SERIAL PRIMARY KEY,
+            user_id         INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+            title           VARCHAR(128),
+            category        VARCHAR(32),
+            selections      JSONB,
+            elements        JSONB,
+            sides           JSONB,
+            canvas_meta     JSONB,
+            thumbnail_front TEXT,
+            thumbnail_back  TEXT,
+            source_type     VARCHAR(32) NOT NULL DEFAULT 'editor',
+            source_job_id   VARCHAR(64),
+            is_favorite     BOOLEAN DEFAULT false,
+            status          VARCHAR(16) DEFAULT 'active',
+            created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    `);
+    try {
+        await pool.query(`CREATE INDEX IF NOT EXISTS idx_user_designs_list ON user_designs(user_id, status, updated_at DESC)`);
+        await pool.query(`CREATE UNIQUE INDEX IF NOT EXISTS idx_user_designs_source ON user_designs(source_type, source_job_id) WHERE source_job_id IS NOT NULL`);
+    } catch (err) {
+        console.warn('⚠️ Failed to ensure user_designs indexes:', (err as any)?.message || err);
+    }
+};
+
 export const runStartupDbMigrations = async (pool: Pool) => {
     await ensureSchemaMigrationsTable(pool);
     await ensureUsersAndAdmin(pool);
@@ -679,5 +840,6 @@ export const runStartupDbMigrations = async (pool: Pool) => {
     await ensureMembershipTables(pool);
     await ensureVirtualTryonResultsTable(pool);
     await ensureAiImageResultsTable(pool);
+    await ensureUserDesignsTable(pool);
     await markMigrationExecuted(pool, SCHEMA_MIGRATION_NAME);
 };

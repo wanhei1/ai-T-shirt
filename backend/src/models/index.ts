@@ -2,6 +2,8 @@ import { Pool } from 'pg';
 import { categoryAliases, normalizeCategory } from '../utils/category';
 import { randomBytes, randomUUID } from 'crypto';
 
+export { StoreModel } from './store';
+
 type CanvasPayload = {
     frontSnapshot?: string | null;
     backSnapshot?: string | null;
@@ -238,6 +240,44 @@ export class OrderModel {
         `;
         const result = await this.pool.query(query, [userId, safeLimit]);
         return result.rows || [];
+    }
+
+    async getOrderById(orderId: number, userId: number) {
+        const query = `
+            SELECT
+                id,
+                user_id,
+                total,
+                category,
+                status,
+                payment_status,
+                payment_channel,
+                payment_order_id,
+                paid_at,
+                refund_status,
+                refunded_at,
+                sku_id,
+                sku_snapshot,
+                production_slot_date,
+                production_due_at,
+                promised_ship_at,
+                items,
+                selections,
+                shipping_info,
+                address,
+                phone,
+                order_time,
+                canvas_meta,
+                source_all_id,
+                CASE WHEN canvas_front IS NOT NULL THEN true ELSE NULL END as has_front_image,
+                CASE WHEN canvas_back IS NOT NULL THEN true ELSE NULL END as has_back_image,
+                created_at
+            FROM orders
+            WHERE id = $1 AND user_id = $2
+            LIMIT 1
+        `;
+        const result = await this.pool.query(query, [orderId, userId]);
+        return result.rows[0] || null;
     }
 
     async getOrderThumbnail(orderId: number, userId: number): Promise<string | null> {
@@ -715,6 +755,7 @@ export class MembershipModel {
             ...row,
             amount: row.amount !== null && row.amount !== undefined ? Number(row.amount) : 0,
             balance: row.balance !== null && row.balance !== undefined ? Number(row.balance) : 0,
+            ai_credits: row.ai_credits !== null && row.ai_credits !== undefined ? Number(row.ai_credits) : 0,
             raw_payload: row.raw_payload ?? null
         };
     }
@@ -724,6 +765,7 @@ export class MembershipModel {
         planId: string;
         amount: number;
         balance?: number;
+        aiCredits?: number;
         currency: string;
         status?: string;
         transactionId: string;
@@ -736,6 +778,7 @@ export class MembershipModel {
             planId,
             amount,
             balance = amount,
+            aiCredits = 0,
             currency,
             status = 'active',
             transactionId,
@@ -745,12 +788,13 @@ export class MembershipModel {
         } = params;
 
         const query = `
-            INSERT INTO memberships (user_id, plan_id, amount, balance, currency, status, transaction_id, provider, started_at, expires_at, raw_payload, updated_at)
-            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW(), $9, $10::jsonb, NOW())
+            INSERT INTO memberships (user_id, plan_id, amount, balance, ai_credits, currency, status, transaction_id, provider, started_at, expires_at, raw_payload, updated_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), $10, $11::jsonb, NOW())
             ON CONFLICT (user_id) DO UPDATE SET
                 plan_id = EXCLUDED.plan_id,
                 amount = EXCLUDED.amount,
                 balance = memberships.balance + EXCLUDED.balance,
+                ai_credits = memberships.ai_credits + EXCLUDED.ai_credits,
                 currency = EXCLUDED.currency,
                 status = EXCLUDED.status,
                 transaction_id = EXCLUDED.transaction_id,
@@ -759,7 +803,7 @@ export class MembershipModel {
                 expires_at = EXCLUDED.expires_at,
                 raw_payload = COALESCE(EXCLUDED.raw_payload, memberships.raw_payload),
                 updated_at = NOW()
-            RETURNING id, user_id, plan_id, amount, balance, currency, status, started_at, expires_at, transaction_id, provider, raw_payload, created_at, updated_at
+            RETURNING id, user_id, plan_id, amount, balance, ai_credits, currency, status, started_at, expires_at, transaction_id, provider, raw_payload, created_at, updated_at
         `;
 
         const values = [
@@ -767,6 +811,7 @@ export class MembershipModel {
             planId,
             amount,
             balance,
+            aiCredits,
             currency,
             status,
             transactionId,
@@ -787,8 +832,27 @@ export class MembershipModel {
                     currency,
                     type: 'membership_purchase',
                     referenceId: transactionId,
-                    rawPayload
+                    rawPayload: {
+                        ...(rawPayload && typeof rawPayload === 'object' ? rawPayload as Record<string, unknown> : {}),
+                        clothingBalanceAdded: balance,
+                        aiCreditsAdded: aiCredits,
+                    }
                 });
+                if (aiCredits > 0) {
+                    await this.insertTransaction(this.pool, {
+                        userId,
+                        delta: aiCredits,
+                        balanceAfter: membership.ai_credits ?? aiCredits,
+                        currency: 'CREDIT',
+                        type: 'ai_credit_grant',
+                        referenceId: transactionId,
+                        rawPayload: {
+                            ...(rawPayload && typeof rawPayload === 'object' ? rawPayload as Record<string, unknown> : {}),
+                            clothingBalanceAdded: balance,
+                            aiCreditsAdded: aiCredits,
+                        }
+                    });
+                }
             }
         } catch (error) {
             console.warn('⚠️ Failed to log membership transaction:', (error as any)?.message || error);
@@ -799,7 +863,7 @@ export class MembershipModel {
 
     async getMembershipByUserId(userId: number) {
         const query = `
-            SELECT id, user_id, plan_id, amount, balance, currency, status, started_at, expires_at, transaction_id, provider, raw_payload, created_at, updated_at
+            SELECT id, user_id, plan_id, amount, balance, ai_credits, currency, status, started_at, expires_at, transaction_id, provider, raw_payload, created_at, updated_at
             FROM memberships
             WHERE user_id = $1
         `;
@@ -809,7 +873,7 @@ export class MembershipModel {
 
     async getMembershipForUpdate(client: { query: Pool['query'] }, userId: number) {
         const result = await client.query(
-            `SELECT id, user_id, plan_id, amount, balance, currency, status, started_at, expires_at, transaction_id, provider, raw_payload, created_at, updated_at
+            `SELECT id, user_id, plan_id, amount, balance, ai_credits, currency, status, started_at, expires_at, transaction_id, provider, raw_payload, created_at, updated_at
              FROM memberships
              WHERE user_id = $1
              FOR UPDATE`,
@@ -837,7 +901,7 @@ export class MembershipModel {
                  expires_at = COALESCE($4, expires_at),
                  updated_at = NOW()
              WHERE user_id = $1
-             RETURNING id, user_id, plan_id, amount, balance, currency, status, started_at, expires_at, transaction_id, provider, raw_payload, created_at, updated_at`,
+             RETURNING id, user_id, plan_id, amount, balance, ai_credits, currency, status, started_at, expires_at, transaction_id, provider, raw_payload, created_at, updated_at`,
             [userId, newBalance, status ?? null, expiresAt ?? null]
         );
 
@@ -859,6 +923,122 @@ export class MembershipModel {
         return membership;
     }
 
+    async creditAiCredits(
+        client: { query: Pool['query'] },
+        params: { userId: number; credits: number; referenceId?: string | null; rawPayload?: unknown }
+    ) {
+        const { userId, credits, referenceId, rawPayload } = params;
+        if (!Number.isFinite(credits) || credits <= 0) {
+            throw new Error('Invalid AI credit amount');
+        }
+
+        const updated = await client.query(
+            `UPDATE memberships
+             SET ai_credits = ai_credits + $2,
+                 updated_at = NOW()
+             WHERE user_id = $1
+             RETURNING id, user_id, plan_id, amount, balance, ai_credits, currency, status, started_at, expires_at, transaction_id, provider, raw_payload, created_at, updated_at`,
+            [userId, credits]
+        );
+
+        if (updated.rows[0]) {
+            const membership = this.mapMembershipRow(updated.rows[0]);
+            try {
+                await this.insertTransaction(client, {
+                    userId,
+                    delta: credits,
+                    balanceAfter: membership?.ai_credits ?? credits,
+                    currency: 'CREDIT',
+                    type: 'ai_credit_grant',
+                    referenceId: referenceId ?? null,
+                    rawPayload
+                });
+            } catch (error) {
+                console.warn('⚠️ Failed to log AI credit grant:', (error as any)?.message || error);
+            }
+            return membership;
+        }
+
+        const transactionId = randomUUID();
+        const inserted = await client.query(
+            `INSERT INTO memberships (user_id, plan_id, amount, balance, ai_credits, currency, status, transaction_id, provider, started_at, expires_at, raw_payload, updated_at)
+             VALUES ($1, 'ai-credit', 0, 0, $2, 'CNY', 'inactive', $3, 'system', NOW(), NOW(), $4::jsonb, NOW())
+             RETURNING id, user_id, plan_id, amount, balance, ai_credits, currency, status, started_at, expires_at, transaction_id, provider, raw_payload, created_at, updated_at`,
+            [userId, credits, transactionId, rawPayload ? JSON.stringify(rawPayload) : null]
+        );
+
+        const membership = this.mapMembershipRow(inserted.rows[0] || null);
+        try {
+            await this.insertTransaction(client, {
+                userId,
+                delta: credits,
+                balanceAfter: membership?.ai_credits ?? credits,
+                currency: 'CREDIT',
+                type: 'ai_credit_grant',
+                referenceId: referenceId ?? transactionId,
+                rawPayload
+            });
+        } catch (error) {
+            console.warn('⚠️ Failed to log AI credit grant (insert):', (error as any)?.message || error);
+        }
+        return membership;
+    }
+
+    async debitAiCredits(
+        client: { query: Pool['query'] },
+        params: { userId: number; credits: number; operation: string; referenceId?: string | null; rawPayload?: unknown }
+    ) {
+        const { userId, credits, operation, referenceId, rawPayload } = params;
+        if (!Number.isFinite(credits) || credits <= 0) {
+            throw new Error('INVALID_AI_CREDIT_AMOUNT');
+        }
+
+        const current = await client.query(
+            `SELECT ai_credits
+             FROM memberships
+             WHERE user_id = $1
+               AND status = 'active'
+               AND (expires_at IS NULL OR expires_at >= NOW())
+             FOR UPDATE`,
+            [userId]
+        );
+        const currentCredits = Number(current.rows[0]?.ai_credits ?? 0);
+
+        if (!current.rows[0] || !Number.isFinite(currentCredits) || currentCredits < credits) {
+            throw new Error('INSUFFICIENT_AI_CREDITS');
+        }
+
+        const nextCredits = Number((currentCredits - credits).toFixed(2));
+        const updated = await client.query(
+            `UPDATE memberships
+             SET ai_credits = $2,
+                 updated_at = NOW()
+             WHERE user_id = $1
+             RETURNING id, user_id, plan_id, amount, balance, ai_credits, currency, status, started_at, expires_at, transaction_id, provider, raw_payload, created_at, updated_at`,
+            [userId, nextCredits]
+        );
+
+        const membership = this.mapMembershipRow(updated.rows[0] || null);
+        try {
+            await this.insertTransaction(client, {
+                userId,
+                delta: -credits,
+                balanceAfter: nextCredits,
+                currency: 'CREDIT',
+                type: 'ai_credit_debit',
+                referenceId: referenceId ?? null,
+                rawPayload: {
+                    operation,
+                    credits,
+                    ...(rawPayload && typeof rawPayload === 'object' ? rawPayload as Record<string, unknown> : {})
+                }
+            });
+        } catch (error) {
+            console.warn('⚠️ Failed to log AI credit debit:', (error as any)?.message || error);
+        }
+        return membership;
+    }
+
     async creditBalance(
         client: { query: Pool['query'] },
         params: { userId: number; amount: number; currency?: string; rawPayload?: unknown }
@@ -873,7 +1053,7 @@ export class MembershipModel {
              SET balance = balance + $2,
                  updated_at = NOW()
              WHERE user_id = $1
-             RETURNING id, user_id, plan_id, amount, balance, currency, status, started_at, expires_at, transaction_id, provider, raw_payload, created_at, updated_at`,
+             RETURNING id, user_id, plan_id, amount, balance, ai_credits, currency, status, started_at, expires_at, transaction_id, provider, raw_payload, created_at, updated_at`,
             [userId, amount]
         );
 
@@ -897,9 +1077,9 @@ export class MembershipModel {
         // If user has no membership row yet, create an inactive "referral" wallet entry.
         const transactionId = randomUUID();
         const inserted = await client.query(
-            `INSERT INTO memberships (user_id, plan_id, amount, balance, currency, status, transaction_id, provider, started_at, expires_at, raw_payload, updated_at)
-             VALUES ($1, 'referral', 0, $2, $3, 'inactive', $4, 'referral', NOW(), NOW(), $5::jsonb, NOW())
-             RETURNING id, user_id, plan_id, amount, balance, currency, status, started_at, expires_at, transaction_id, provider, raw_payload, created_at, updated_at`,
+            `INSERT INTO memberships (user_id, plan_id, amount, balance, ai_credits, currency, status, transaction_id, provider, started_at, expires_at, raw_payload, updated_at)
+             VALUES ($1, 'referral', 0, $2, 0, $3, 'inactive', $4, 'referral', NOW(), NOW(), $5::jsonb, NOW())
+             RETURNING id, user_id, plan_id, amount, balance, ai_credits, currency, status, started_at, expires_at, transaction_id, provider, raw_payload, created_at, updated_at`,
             [userId, amount, currency, transactionId, rawPayload ? JSON.stringify(rawPayload) : null]
         );
 

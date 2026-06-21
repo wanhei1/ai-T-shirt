@@ -1,7 +1,7 @@
 import 'dotenv/config';
 import express, { NextFunction, Request, Response } from 'express';
 import cors from 'cors';
-import rateLimit from 'express-rate-limit';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import path from 'path';
 import { mkdirSync } from 'fs';
 import connectToDatabase, { connectToReadDatabase } from './config/database';
@@ -213,7 +213,7 @@ const rateLimitKeyGenerator = (req: Request) => {
             if (payload.userId) return `user:${payload.userId}`;
         } catch { /* ignore malformed tokens */ }
     }
-    return req.ip || req.socket.remoteAddress || 'unknown';
+    return ipKeyGenerator(req.ip || req.socket.remoteAddress || '127.0.0.1');
 };
 
 // Auth endpoints: 5/min/IP (strict)
@@ -222,7 +222,7 @@ const authLimiter = rateLimit({
     max: 5,
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req) => req.ip || req.socket.remoteAddress || 'unknown',
+    keyGenerator: (req) => ipKeyGenerator(req.ip || req.socket.remoteAddress || '127.0.0.1'),
     message: { error: 'Too many requests', retryAfter: 60 },
 });
 
@@ -242,7 +242,7 @@ const pollLimiter = rateLimit({
     max: 120,
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req) => req.ip || req.socket.remoteAddress || 'unknown',
+    keyGenerator: (req) => ipKeyGenerator(req.ip || req.socket.remoteAddress || '127.0.0.1'),
     message: { error: 'Too many requests', retryAfter: 60 },
 });
 
@@ -252,7 +252,7 @@ const generalLimiter = rateLimit({
     max: 300,
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: (req) => req.ip || req.socket.remoteAddress || 'unknown',
+    keyGenerator: (req) => ipKeyGenerator(req.ip || req.socket.remoteAddress || '127.0.0.1'),
     message: { error: 'Too many requests', retryAfter: 60 },
 });
 
