@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>定制工坊</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body class="editor-page">
+    <nav class="nav">
+      <div class="brand">衣台工坊</div>
+      <div class="nav-links">
+        <a href="#">图案</a>
+        <a href="#">字体</a>
+        <a href="#">试穿</a>
+        <a href="#">下单</a>
+        <a href="./index.html">返回目录</a>
+      </div>
+      <div class="nav-actions">
+        <a class="pill" href="#">保存</a>
+        <a class="pill dark" href="#">生成试衣</a>
+      </div>
+    </nav>
+
+    <main class="atelier">
+      <aside class="panel">
+        <span class="seal">作</span>
+        <h1 style="font-family:var(--serif);font-size:38px;line-height:1.1">山海图案库</h1>
+        <p class="lead" style="font-size:15px">编辑器可以更像服装工坊，不必把所有东西放在一个居中画布周围。</p>
+        <div class="tool-grid">
+          <button class="tool">应龙线稿</button>
+          <button class="tool">九尾水墨</button>
+          <button class="tool">云雷纹边框</button>
+          <button class="tool">朱印落款</button>
+          <button class="tool">鲲鹏大图</button>
+          <button class="tool">国风字体</button>
+        </div>
+      </aside>
+
+      <section class="canvas-stage">
+        <img src="./assets/tryon-models.png" alt="男女中国模特 AI 试衣效果" />
+        <div class="design-board">
+          <p class="small-caps">Current design</p>
+          <h2 style="font-family:var(--serif);font-size:34px;margin:0">黑金应龙</h2>
+          <div class="swatches">
+            <span class="swatch" style="background:#11100d"></span>
+            <span class="swatch" style="background:#f5efe3"></span>
+            <span class="swatch" style="background:#b73522"></span>
+            <span class="swatch" style="background:#1f6f62"></span>
+          </div>
+          <div class="metric"><span>版型</span><strong>男女同款</strong></div>
+          <div class="metric"><span>图案位置</span><strong>胸前偏左</strong></div>
+          <div class="metric"><span>试衣状态</span><strong>已生成</strong></div>
+        </div>
+      </section>
+
+      <aside class="panel">
+        <h2 style="font-family:var(--serif);font-size:32px;margin-top:0">试衣预览</h2>
+        <div class="preview-list">
+          <div class="mini-look">
+            <img src="./assets/female-model.png" alt="女模特预览" />
+            <div>
+              <strong>女款效果</strong>
+              <p>首页、商品页、试衣页都需要这样的真实中国模特图。</p>
+            </div>
+          </div>
+          <div class="mini-look">
+            <img src="./assets/male-model.png" alt="男模特预览" />
+            <div>
+              <strong>男款效果</strong>
+              <p>男款不能只用白底衣服图，需要真人穿着建立判断。</p>
+            </div>
+          </div>
+          <div class="mini-look">
+            <img src="./assets/product-flatlay.png" alt="商品平铺预览" />
+            <div>
+              <strong>商品图</strong>
+              <p>作为下单确认图、购物车缩略图和作品广场封面。</p>
+            </div>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </body>
+</html>
