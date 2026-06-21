@@ -148,8 +148,28 @@ export default function CartPage() {
 
   return (
     <AuthGuard>
-      <div className="min-h-screen bg-background">
-        <div className="container mx-auto px-4 py-10">
+      <div className="min-h-screen">
+        <div className="yituai-page-shell">
+          <div
+            className="yituai-bleed-hero mb-10"
+            style={{ backgroundImage: "url(/home-shanhaijing/package-delivery.png)" }}
+          >
+            <div className="yituai-bleed-content">
+              <div className="yituai-bleed-copy">
+                <span className="yituai-seal">车</span>
+                <p className="yituai-kicker mt-8">Cart</p>
+                <h1 className="yituai-display mt-3">
+                  {translate({ zh: "确认你的定制成衣", en: "Review your custom pieces" })}
+                </h1>
+                <p className="mt-6 text-lg leading-8">
+                  {translate({
+                    zh: "这里保留原来的购物车、地址和结算流程，只把页面包装成更像服装品牌的交付体验。",
+                    en: "The cart, address, and checkout flow remain intact, wrapped in a more apparel-first experience.",
+                  })}
+                </p>
+              </div>
+            </div>
+          </div>
           <div className="mb-6 flex items-start justify-between gap-6">
             <div>
               <h1 className="text-3xl font-bold text-foreground">

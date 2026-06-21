@@ -804,7 +804,7 @@ export default function PreviewPage() {
 
   if (!designData) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center">
+      <div className="min-h-screen flex items-center justify-center">
         <div className="text-center">
           <p className="text-muted-foreground mb-4">No design data found</p>
           <Button asChild>
@@ -835,7 +835,7 @@ export default function PreviewPage() {
     };
 
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-4">
+      <div className="min-h-screen flex items-center justify-center p-4">
         <Card className="max-w-sm w-full text-center">
           <CardContent className="pt-6 space-y-4">
             <div className="w-16 h-16 bg-blue-100 rounded-full flex items-center justify-center mx-auto">
@@ -886,7 +886,7 @@ export default function PreviewPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen">
       {/* Header */}
       <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">

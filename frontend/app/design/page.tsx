@@ -24,14 +24,14 @@ const tshirtStyles = [
     name: { zh: "男款", en: "Men" },
     description: { zh: "男款版型", en: "Men's fit" },
     price: 188,
-    image: "/malemodel.png",
+    image: "/tryon-models/chinese-male-front.png",
   },
   {
     id: "slim",
     name: { zh: "女款", en: "Women" },
     description: { zh: "女款版型", en: "Women's fit" },
     price: 188,
-    image: "/femalemodel.png",
+    image: "/tryon-models/chinese-female-front.png",
   },
 ];
 
@@ -70,10 +70,10 @@ export default function DesignPage() {
 
   return (
     <AuthGuard requireAuth={false}>
-      <div className="min-h-screen bg-background">
+      <div className="min-h-screen">
         {/* Header */}
-        <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
-          <div className="container mx-auto px-4 py-4 flex items-center justify-between">
+        <header className="sticky top-0 z-40 border-b border-[#15120e]/10 bg-[#f4ecdc]/88 backdrop-blur-xl">
+          <div className="mx-auto flex max-w-[1500px] items-center justify-between px-4 py-4 md:px-8">
             <div className="flex items-center gap-4">
               <Button variant="ghost" size="sm" asChild>
                 <Link href="/">
@@ -82,7 +82,7 @@ export default function DesignPage() {
                 </Link>
               </Button>
               <div className="flex items-center gap-2">
-                <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
+                <div className="flex h-9 w-9 items-center justify-center rounded-[26%_18%_24%_20%] bg-[#b73522]">
                   <Palette className="w-5 h-5 text-primary-foreground" />
                 </div>
                 <span className="text-xl font-bold text-foreground">
@@ -98,7 +98,7 @@ export default function DesignPage() {
           </div>
         </header>
 
-        <div className="container mx-auto px-4 py-8">
+          <div className="yituai-page-shell">
           {/* Progress Steps */}
           <div className="flex items-center justify-center mb-8">
             <div className="flex items-center gap-4 flex-wrap justify-center">
@@ -132,10 +132,31 @@ export default function DesignPage() {
           </div>
 
           <div className="max-w-6xl mx-auto">
-            <div className="text-center mb-8">
-              <h1 className="text-3xl md:text-4xl font-bold mb-4">
-                {translate({ zh: "选择你的 T 恤", en: "Choose Your T-Shirt" })}
-              </h1>
+            <div
+              className="yituai-bleed-hero mb-12"
+              style={{ backgroundImage: `url(${selectedStyleData?.image || "/placeholder.svg"})`, backgroundPosition: "center 18%" }}
+            >
+              <div className="yituai-bleed-content">
+                <div className="yituai-bleed-copy">
+                  <span className="yituai-seal">选款</span>
+                  <p className="yituai-kicker mt-8">Step 01 / garment</p>
+                  <h1 className="yituai-display mt-3">
+                    {translate({ zh: "先选一件适合穿出门的 T 恤", en: "Choose a tee made to wear" })}
+                  </h1>
+                  <p className="mt-6 text-lg leading-8">
+                    {translate({
+                      zh: "男款、女款、黑白两色先保持清晰。后续的 AI 图案、文字和试衣都基于这里的版型继续推进。",
+                      en: "Start with a clear fit and color before moving into AI artwork, text, and try-on.",
+                    })}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="mb-8 text-center">
+              <h2 className="font-serif text-4xl font-black md:text-5xl">
+                {translate({ zh: "选择款式、颜色与尺码", en: "Choose style, color, and size" })}
+              </h2>
               <p className="text-xl text-muted-foreground">
                 {translate({
                   zh: "选择喜欢的版型、颜色与尺码，即刻开始设计",
@@ -147,9 +168,9 @@ export default function DesignPage() {
             <div className="grid lg:grid-cols-2 gap-8">
               {/* Product Preview */}
               <div className="space-y-6">
-                <Card>
+                <Card className="overflow-hidden">
                   <CardContent className="p-6">
-                    <div className="h-[280px] sm:h-[400px] md:h-[520px] lg:h-[600px] bg-muted rounded-lg mb-4 flex items-center justify-center overflow-hidden">
+                    <div className="mb-4 flex h-[280px] items-center justify-center overflow-hidden border border-[#15120e]/10 bg-[#eadcc2] sm:h-[400px] md:h-[520px] lg:h-[600px]">
                       <img
                         src={selectedStyleData?.image || "/placeholder.svg"}
                         alt={

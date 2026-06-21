@@ -16,6 +16,7 @@ import {
   ArrowRight,
   Camera,
   Palette,
+  Save,
   Sparkles,
   Type,
   Upload,
@@ -750,6 +751,54 @@ export default function DesignEditorPage() {
     hasLoadedDesignRef.current = true
   }, [hydrated, hasLoadedDesignRef])
 
+  // Load design from personal library via ?fromDesign=ID query param
+  useEffect(() => {
+    if (!hydrated) return
+    const params = new URLSearchParams(window.location.search)
+    const fromDesignId = params.get('fromDesign')
+    if (!fromDesignId) return
+    const designId = Number(fromDesignId)
+    if (!Number.isFinite(designId) || designId <= 0) return
+
+    let cancelled = false
+    ;(async () => {
+      try {
+        const { apiClient } = await import('@/lib/api-client')
+        const { design } = await apiClient.getUserDesignDetail(designId)
+        if (cancelled || !design) return
+
+        // Write selections to localStorage
+        if (design.selections) {
+          try {
+            localStorage.setItem('tshirtSelections', JSON.stringify(design.selections))
+          } catch { /* ignore */ }
+        }
+
+        // Write design data (elements) to localStorage
+        if (design.elements && Array.isArray(design.elements) && design.elements.length > 0) {
+          const designData = {
+            elements: design.elements,
+            canvas: design.canvas_meta || {},
+          }
+          try {
+            localStorage.setItem('designData', JSON.stringify(designData))
+          } catch { /* ignore */ }
+          setDesignElements(design.elements)
+          hadStoredDesignRef.current = true
+          hasUserEditedRef.current = true
+        }
+
+        // Clean up query param without full page reload
+        const cleanUrl = window.location.pathname
+        window.history.replaceState({}, '', cleanUrl)
+      } catch (err) {
+        console.warn('Failed to load design from library:', err)
+      }
+    })()
+
+    return () => { cancelled = true }
+  }, [hydrated])
+
   // Persist design elements while editing so navigating to preview/back keeps the state
   useEffect(() => {
     // Avoid overwriting saved designs with an empty state before initial load completes
@@ -1043,6 +1092,55 @@ export default function DesignEditorPage() {
   const visibleCurrentElements = currentSideElements.filter((el) => el.visible)
   const otherSideCount = designElements.filter((el) => el.side === (showFront ? "back" : "front")).length
 
+  // Save current design to personal library
+  const [isSaving, setIsSaving] = useState(false)
+  const handleSaveToLibrary = async () => {
+    if (isSaving || designElements.length === 0) return
+    setIsSaving(true)
+    try {
+      // Generate thumbnail from canvas
+      let thumbnailFront: string | undefined
+      try {
+        const canvas = document.querySelector('canvas') as HTMLCanvasElement | null
+        if (canvas) {
+          thumbnailFront = canvas.toDataURL('image/jpeg', 0.75)
+        }
+      } catch { /* ignore */ }
+
+      const selectionsRaw = typeof window !== 'undefined' ? localStorage.getItem('tshirtSelections') : null
+      const selections = selectionsRaw ? JSON.parse(selectionsRaw) : null
+
+      await apiClient.createUserDesign({
+        title: selections?.style ? `${selections.style} 设计` : undefined,
+        category: selections?.style || undefined,
+        selections,
+        elements: designElements,
+        sides: {
+          front: designElements.filter(e => e.side === 'front'),
+          back: designElements.filter(e => e.side === 'back'),
+        },
+        canvasMeta: canvasMeta,
+        thumbnailFront,
+        sourceType: 'editor',
+      })
+      // Simple toast
+      const toast = document.createElement('div')
+      toast.className = 'fixed bottom-4 right-4 z-[9999] rounded-lg bg-green-600 px-4 py-2 text-white shadow-lg text-sm'
+      toast.textContent = '✅ 已保存到个人作品库'
+      document.body.appendChild(toast)
+      setTimeout(() => toast.remove(), 3000)
+    } catch (err) {
+      console.warn('Save to library failed:', err)
+      const toast = document.createElement('div')
+      toast.className = 'fixed bottom-4 right-4 z-[9999] rounded-lg bg-red-600 px-4 py-2 text-white shadow-lg text-sm'
+      toast.textContent = '❌ 保存失败，请重试'
+      document.body.appendChild(toast)
+      setTimeout(() => toast.remove(), 3000)
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
   const handleContinueToPreview = async () => {
     if (isContinuingToPreview) return
     setIsContinuingToPreview(true)
@@ -1280,6 +1378,17 @@ export default function DesignEditorPage() {
                 </Button>
               )}
             </div>
+
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleSaveToLibrary}
+              disabled={isSaving || designElements.length === 0}
+              className={isMobile ? "h-8 px-2" : ""}
+            >
+              <Save className={`w-4 h-4 ${isMobile ? "" : "mr-1"} ${isSaving ? "animate-pulse" : ""}`} />
+              {!isMobile && translate({ zh: "保存", en: "Save" })}
+            </Button>
 
             <Button onClick={handleContinueToPreview} disabled={designElements.length === 0 || isContinuingToPreview}>
               {isContinuingToPreview ? (

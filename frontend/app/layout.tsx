@@ -8,6 +8,7 @@ import { Suspense } from "react";
 import { AuthProvider } from "@/contexts/auth-context";
 import { LanguageProvider } from "@/contexts/language-context";
 import { NavGuard } from "@/components/nav-guard";
+import { PublicChrome } from "@/components/public-chrome";
 import "./globals.css";
 
 export const viewport: Viewport = {
@@ -40,7 +41,9 @@ export default function RootLayout({
         <LanguageProvider>
           <AuthProvider>
             <NavGuard />
-            <Suspense fallback={<div>Loading...</div>}>{children}</Suspense>
+            <PublicChrome>
+              <Suspense fallback={<div>Loading...</div>}>{children}</Suspense>
+            </PublicChrome>
             {enableVercelAnalytics ? <Analytics /> : null}
           </AuthProvider>
         </LanguageProvider>

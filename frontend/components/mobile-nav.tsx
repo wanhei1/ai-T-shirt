@@ -19,8 +19,10 @@ import {
   Store,
   CreditCard,
   Globe,
+  PackageCheck,
 } from "lucide-react";
 import { useState } from "react";
+import { YituaiLogo } from "@/components/yituai-logo";
 
 export function MobileNav() {
   const { user, logout } = useAuth();
@@ -42,13 +44,9 @@ export function MobileNav() {
         <div className="flex flex-col h-full">
           {/* Header */}
           <div className="p-4 border-b">
-            <Link
-              href="/"
-              className="text-xl font-bold"
-              onClick={handleNavClick}
-            >
-              yituai
-            </Link>
+            <div onClick={handleNavClick}>
+              <YituaiLogo />
+            </div>
           </div>
 
           {/* Nav Links */}
@@ -79,6 +77,14 @@ export function MobileNav() {
                 >
                   <ShoppingCart className="h-5 w-5" />
                   {translate({ zh: "购物车", en: "Cart" })}
+                </Link>
+                <Link
+                  href="/orders"
+                  onClick={handleNavClick}
+                  className="flex items-center gap-3 px-3 py-3 rounded-md hover:bg-accent text-sm font-medium transition-colors"
+                >
+                  <PackageCheck className="h-5 w-5" />
+                  {translate({ zh: "订单", en: "Orders" })}
                 </Link>
                 <Link
                   href="/profile"
