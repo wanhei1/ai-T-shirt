@@ -91,6 +91,8 @@ detectron2/
 
 # ComfyUI runtime folders
 **/models/
+!backend/src/models/
+!backend/src/models/**
 **/input/
 **/output/
 **/temp/
@@ -117,3 +119,11 @@ backend/scripts/
 scripts/
 docs-archive/
 docs/*.md
+
+# Hermes agent plans & local backups
+.hermes/
+backups/
+docs/reports/
+
+# Frontend backup files
+*.backup-*
