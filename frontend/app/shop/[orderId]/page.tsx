@@ -266,16 +266,30 @@ export default function ShopDetailPage({ params }: { params: Promise<{ orderId: 
   };
 
   return (
-    <div className="min-h-screen bg-background">
-      <div className="container mx-auto px-4 py-10">
+    <div className="min-h-screen">
+      <div className="yituai-page-shell">
+        <div
+          className="yituai-bleed-hero mb-10"
+          style={{ backgroundImage: `url(${thumbnailSrc || "/home-shanhaijing/product-flatlay.png"})` }}
+        >
+          <div className="yituai-bleed-content">
+            <div className="yituai-bleed-copy">
+              <span className="yituai-seal">品</span>
+              <p className="yituai-kicker mt-8">Product detail</p>
+              <h1 className="yituai-display mt-3">
+                {translate({ zh: "社区作品详情", en: "Community design detail" })}
+              </h1>
+              <p className="mt-6 text-lg leading-8">
+                {translate({ zh: "查看作品正反面、加入购物车或基于同款继续定制。", en: "Review front and back, add to cart, or customize the same design." })}
+              </p>
+            </div>
+          </div>
+        </div>
         <div className="mb-8 flex items-start justify-between gap-6">
           <div>
-            <h1 className="text-3xl font-bold text-foreground">
+            <h2 className="font-serif text-4xl font-black text-foreground">
               {translate({ zh: "商品详情", en: "Product Details" })}
-            </h1>
-            <p className="text-muted-foreground">
-              {translate({ zh: "浏览与购买社区作品", en: "Browse and buy community designs" })}
-            </p>
+            </h2>
           </div>
           <div className="flex gap-3">
             <Button variant="outline" asChild className="bg-transparent">

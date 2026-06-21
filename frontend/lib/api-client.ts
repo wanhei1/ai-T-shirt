@@ -1,4 +1,5 @@
 import type { AuthResponse, LoginRequest, RegisterRequest, User } from '@/types/auth';
+import type { MarketplaceProduct, MarketplaceStore } from './marketplace-types';
 import {
   API_COMMON_ERROR_CODES,
   REQUEST_VALIDATION_ERROR_CODES,
@@ -509,6 +510,12 @@ class ApiClient {
     });
   }
 
+  async getOrderDetail(orderId: number | string) {
+    return this.request<{ order: any }>(`/api/orders/${orderId}`, {
+      method: 'GET',
+    });
+  }
+
   getThumbnailUrl(orderId: number | string): string {
     // Use Next.js /backend/ proxy so mobile browsers don't need direct access to port 8189
     // Append auth token as query param so <img> tags can authenticate (they can't send Authorization headers)
@@ -729,6 +736,84 @@ class ApiClient {
     });
   }
 
+  // Marketplace / creator stores
+  async getMarketplaceProducts(params?: { limit?: number; offset?: number; category?: string; sort?: 'new' | 'sales'; search?: string }) {
+    const searchParams = new URLSearchParams();
+    if (typeof params?.limit === 'number') searchParams.set('limit', String(params.limit));
+    if (typeof params?.offset === 'number') searchParams.set('offset', String(params.offset));
+    if (typeof params?.category === 'string' && params.category.trim().length > 0) searchParams.set('category', params.category.trim());
+    if (params?.sort === 'sales' || params?.sort === 'new') searchParams.set('sort', params.sort);
+    if (typeof params?.search === 'string' && params.search.trim().length > 0) searchParams.set('search', params.search.trim());
+    const query = searchParams.toString();
+    return this.request<{ products: MarketplaceProduct[] }>(query ? `/api/marketplace/products?${query}` : '/api/marketplace/products', {
+      method: 'GET',
+    });
+  }
+
+  async getMarketplaceProduct(productId: number | string) {
+    return this.request<{ product: MarketplaceProduct }>(`/api/marketplace/products/${productId}`, {
+      method: 'GET',
+    });
+  }
+
+  async getPublicStore(slug: string) {
+    return this.request<{ store: MarketplaceStore }>(`/api/stores/${encodeURIComponent(slug)}`, {
+      method: 'GET',
+    });
+  }
+
+  async getPublicStoreProducts(slug: string, params?: { limit?: number; offset?: number }) {
+    const searchParams = new URLSearchParams();
+    if (typeof params?.limit === 'number') searchParams.set('limit', String(params.limit));
+    if (typeof params?.offset === 'number') searchParams.set('offset', String(params.offset));
+    const query = searchParams.toString();
+    return this.request<{ products: MarketplaceProduct[] }>(`/api/stores/${encodeURIComponent(slug)}/products${query ? `?${query}` : ''}`, {
+      method: 'GET',
+    });
+  }
+
+  async getSellerStore() {
+    return this.request<{ store: MarketplaceStore | null }>('/api/seller/store', {
+      method: 'GET',
+    });
+  }
+
+  async upsertSellerStore(payload: {
+    slug: string;
+    displayName: string;
+    bio?: string;
+    avatarUrl?: string;
+    bannerUrl?: string;
+    tags?: string[];
+  }) {
+    return this.request<{ store: MarketplaceStore }>('/api/seller/store', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
+  async getSellerProducts() {
+    return this.request<{ products: MarketplaceProduct[] }>('/api/seller/products', {
+      method: 'GET',
+    });
+  }
+
+  async createSellerProduct(payload: {
+    allDesignId: number;
+    title: string;
+    description?: string;
+    price: number;
+    compareAtPrice?: number;
+    tags?: string[];
+    status?: 'draft' | 'active';
+    imageUrls?: string[];
+  }) {
+    return this.request<{ product: MarketplaceProduct }>('/api/seller/products', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  }
+
   async activateMembership(payload: {
     planId: string;
     paymentReference?: string;
@@ -753,6 +838,39 @@ class ApiClient {
     });
   }
 
+  async getMembershipPlans() {
+    return this.request<{
+      plans: Array<{
+        id: string;
+        label: string;
+        amount: number;
+        clothingBalance: number;
+        aiCredits: number;
+        currency: string;
+        durationDays: number;
+        discountRate: number;
+        equivalents: {
+          localImages: number;
+          tryOns: number;
+          apiStandardImages: number;
+        };
+      }>;
+      aiCreditCosts: {
+        localImage: number;
+        localHdImage: number;
+        virtualTryon: number;
+        apiStandardImage: number;
+        apiPremiumImage: number;
+      };
+      inviteRules: {
+        inviteeDiscountText: string;
+        inviterRewardText: string;
+      };
+    }>("/api/memberships/plans", {
+      method: "GET",
+    });
+  }
+
   // Jobs
   async createJob(payload: { type: "ai-image" | "virtual-tryon"; payload: any }) {
     return this.request<{
@@ -766,6 +884,7 @@ class ApiClient {
         delayed?: number;
         paused?: number;
       };
+      creditsCharged?: number;
     }>("/api/jobs", {
       method: "POST",
       body: JSON.stringify(payload),
@@ -802,6 +921,83 @@ class ApiClient {
       method: "POST",
       body: JSON.stringify({ code }),
     });
+  }
+
+  // ==================== 个人作品库 (User Designs) ====================
+
+  async getUserDesigns(params?: {
+    page?: number;
+    limit?: number;
+    sourceType?: string;
+    favorite?: boolean;
+    sort?: string;
+  }) {
+    const qs = new URLSearchParams();
+    if (params?.page) qs.set("page", String(params.page));
+    if (params?.limit) qs.set("limit", String(params.limit));
+    if (params?.sourceType) qs.set("sourceType", params.sourceType);
+    if (params?.favorite !== undefined) qs.set("favorite", String(params.favorite));
+    if (params?.sort) qs.set("sort", params.sort);
+    const query = qs.toString();
+    return this.request<{
+      designs: any[];
+      total: number;
+      page: number;
+      limit: number;
+    }>(`/api/user-designs${query ? `?${query}` : ""}`, {
+      method: "GET",
+    });
+  }
+
+  async getUserDesignDetail(id: number) {
+    return this.request<{ design: any }>(`/api/user-designs/${id}`, {
+      method: "GET",
+    });
+  }
+
+  async createUserDesign(data: {
+    title?: string;
+    category?: string;
+    selections?: any;
+    elements?: any[];
+    sides?: any;
+    canvasMeta?: any;
+    thumbnailFront?: string;
+    thumbnailBack?: string;
+    sourceType?: string;
+    sourceJobId?: string;
+  }) {
+    return this.request<{ id: number; message: string }>("/api/user-designs", {
+      method: "POST",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateUserDesign(id: number, data: { title?: string; category?: string }) {
+    return this.request<{ id: number; message: string }>(`/api/user-designs/${id}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteUserDesign(id: number) {
+    return this.request<{ success: boolean }>(`/api/user-designs/${id}`, {
+      method: "DELETE",
+    });
+  }
+
+  async duplicateUserDesign(id: number) {
+    return this.request<{ id: number; message: string }>(
+      `/api/user-designs/${id}/duplicate`,
+      { method: "POST" }
+    );
+  }
+
+  async toggleFavoriteUserDesign(id: number) {
+    return this.request<{ id: number; isFavorite: boolean }>(
+      `/api/user-designs/${id}/favorite`,
+      { method: "PUT" }
+    );
   }
 }
 
