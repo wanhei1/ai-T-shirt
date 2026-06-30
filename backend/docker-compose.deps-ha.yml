@@ -78,7 +78,7 @@ services:
       RABBITMQ_ERLANG_COOKIE: SUPERSECRETCOOKIE
 
   postgres-primary:
-    image: bitnami/postgresql-repmgr:16
+    image: soldevelo/postgresql-repmgr:16
     environment:
       POSTGRESQL_POSTGRES_PASSWORD: postgres_admin_password
       POSTGRESQL_USERNAME: tshirt_user
@@ -90,7 +90,7 @@ services:
       REPMGR_NODE_NETWORK_NAME: postgres-primary
 
   postgres-standby:
-    image: bitnami/postgresql-repmgr:16
+    image: soldevelo/postgresql-repmgr:16
     depends_on:
       - postgres-primary
     environment:
